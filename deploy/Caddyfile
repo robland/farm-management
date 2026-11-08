@@ -1,0 +1,56 @@
+# Pilot reverse proxy (docs/operations/DEPLOYMENT.md).
+# - HTTPS certificates obtained and renewed automatically for FMS_DOMAIN.
+# - /api, /admin, /static → Django (gunicorn); everything else → the Web client (SPA).
+{
+	# Certificate authority account: receives expiry warnings.
+	email {$FMS_ACME_EMAIL}
+}
+
+{$FMS_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Largest accepted upload: technical sheet (FMS_MAX_TECHNICAL_SHEET_MB, 20 MB) + margin.
+	request_body {
+		max_size 25MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), geolocation=(self), microphone=()"
+		-Server
+	}
+
+	@backend path /api/* /admin /admin/* /static/*
+	handle @backend {
+		reverse_proxy api:8000 {
+			# Gunicorn timeout is 120 s (synchronous AI calls, OPEN_QUESTIONS Q24).
+			transport http {
+				read_timeout 130s
+			}
+		}
+	}
+
+	handle {
+		root * /srv
+		header {
+			# The client loads nothing from other origins.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+			X-Frame-Options "DENY"
+		}
+		# Hashed build assets never change; HTML and the service worker must be revalidated
+		# so that a new version reaches the devices.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@revalidate not path /assets/*
+		header @revalidate Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

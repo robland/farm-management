@@ -45,3 +45,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build --workspace web
+
+  # Pilot images (docs/operations/DEPLOYMENT.md): a broken Dockerfile, collectstatic or
+  # Caddyfile (validated during the build) fails here rather than on the server.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fms-api backend
+      - run: docker build -f frontend/web/Dockerfile -t fms-web .
+      - name: Compose file is valid
+        run: |
+          cp deploy/.env.example deploy/.env
+          sed -i 's/^DJANGO_SECRET_KEY=.*/DJANGO_SECRET_KEY=ci-only/; s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-only/' deploy/.env
+          docker compose -f deploy/compose.pilot.yml --env-file deploy/.env config --quiet

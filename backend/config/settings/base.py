@@ -134,7 +134,8 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
-    "SIGNING_KEY": env("JWT_SIGNING_KEY", default=SECRET_KEY),
+    # An empty value (blank line in an .env file) must never become an empty signing key.
+    "SIGNING_KEY": env("JWT_SIGNING_KEY", default="") or SECRET_KEY,
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
@@ -187,6 +188,8 @@ STORAGES: dict[str, dict[str, Any]] = {
 
 # Product-level settings
 FMS_INVITATION_TTL_DAYS = env.int("FMS_INVITATION_TTL_DAYS", default=7)
+# Web refresh-token cookie (apps/users/cookies.py, Q26): HTTPS only, except local development.
+FMS_REFRESH_COOKIE_SECURE = env.bool("FMS_REFRESH_COOKIE_SECURE", default=True)
 FMS_MAX_UPLOAD_MB = env.int("FMS_MAX_UPLOAD_MB", default=10)
 FMS_MAX_TECHNICAL_SHEET_MB = env.int("FMS_MAX_TECHNICAL_SHEET_MB", default=20)
 

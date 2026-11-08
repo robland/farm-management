@@ -53,3 +53,43 @@ def test_production_never_runs_in_debug(prod):
     assert prod.DEBUG is False
     assert prod.ALLOWED_HOSTS == ["fms.example.org"]
     assert prod.SECURE_HSTS_SECONDS >= 31536000
+
+
+def test_pilot_deployment_settings(monkeypatch, prod):
+    # Web refresh token cookie never travels over plain HTTP in production (Q26).
+    assert prod.FMS_REFRESH_COOKIE_SECURE is True
+    # Admin static files served by gunicorn, right after the security middleware.
+    assert prod.MIDDLEWARE[:2] == [
+        "django.middleware.security.SecurityMiddleware",
+        "whitenoise.middleware.WhiteNoiseMiddleware",
+    ]
+    assert prod.STORAGES["staticfiles"]["BACKEND"].startswith("whitenoise.")
+    assert prod.CSRF_TRUSTED_ORIGINS == []
+
+
+@pytest.mark.parametrize(("value", "expected"), [("", "secret"), ("jwt-" + "j" * 60, "jwt")])
+def test_jwt_signing_key_is_never_empty(monkeypatch, value, expected):
+    secret = "prod-check-" + "k" * 60
+    monkeypatch.setenv("DJANGO_SECRET_KEY", secret)
+    monkeypatch.setenv("JWT_SIGNING_KEY", value)
+    sys.modules.pop("config.settings.prod", None)
+    sys.modules.pop("config.settings.base", None)
+    try:
+        key = importlib.import_module("config.settings.prod").SIMPLE_JWT["SIGNING_KEY"]
+        assert key == (secret if expected == "secret" else value)
+    finally:
+        sys.modules.pop("config.settings.prod", None)
+        sys.modules.pop("config.settings.base", None)
+
+
+def test_trusted_origins_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "prod-check-" + "k" * 60)
+    monkeypatch.setenv("DJANGO_CSRF_TRUSTED_ORIGINS", "https://pilote.example.org")
+    sys.modules.pop("config.settings.prod", None)
+    sys.modules.pop("config.settings.base", None)
+    try:
+        module = importlib.import_module("config.settings.prod")
+        assert module.CSRF_TRUSTED_ORIGINS == ["https://pilote.example.org"]
+    finally:
+        sys.modules.pop("config.settings.prod", None)
+        sys.modules.pop("config.settings.base", None)

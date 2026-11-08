@@ -22,7 +22,7 @@ function me(userId: string, permissions: string[], extraFarms: Me["farms"] = [])
 
 /** Opens the app with a cached session, offline, and local data already pulled. */
 async function openOffline(profile: Me, entities: { type: string; id: string; data: object }[] = []) {
-  localStorage.setItem("fms.refresh", "r");
+  localStorage.setItem("fms.session", "1");
   localStorage.setItem("fms.deviceId", "dev-1");
   localStorage.setItem("fms.me", JSON.stringify(profile));
   localStorage.setItem("fms.farm", FARM);
@@ -141,7 +141,7 @@ describe("session", () => {
   });
 
   it("shows profile and notifications on the farm picker, with readable roles, and logs out", async () => {
-    localStorage.setItem("fms.refresh", "r");
+    localStorage.setItem("fms.session", "1");
     localStorage.setItem("fms.deviceId", "dev-1");
     localStorage.setItem("fms.me", JSON.stringify(me("user-multi", [], [
       { id: "farm-2", name: "Ferme Sud", organization_id: "org-1", role: "farm_manager", is_org_admin: false,
@@ -166,7 +166,7 @@ describe("session", () => {
                                         { id: "org-2", name: "Autre", is_org_admin: false }] };
     const created: unknown[] = [];
     let profile = admin;
-    localStorage.setItem("fms.refresh", "r");
+    localStorage.setItem("fms.session", "1");
     localStorage.setItem("fms.deviceId", "dev-1");
     localStorage.setItem("fms.me", JSON.stringify(admin));
     const json = (data: unknown, status = 200) =>

@@ -13,3 +13,10 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
+# Public origin(s) behind the reverse proxy, e.g. https://pilote.example.org: required for
+# the admin's POST forms (Django checks the Origin header against them).
+CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
+# Collected static files (Django admin) served by gunicorn itself, right after the security
+# middleware; compressed and content-hashed: cached for a long time, never stale.
+MIDDLEWARE = [MIDDLEWARE[0], "whitenoise.middleware.WhiteNoiseMiddleware", *MIDDLEWARE[1:]]
+STORAGES["staticfiles"] = {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"}

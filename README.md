@@ -15,6 +15,7 @@ Plateforme de gestion agricole multi-exploitations : de la conception des plans 
 | `docs/architecture/AGRONOMY_ENGINE.md` | Formules, unités et hypothèses du moteur agronomique |
 | `IMPLEMENTATION_PLAN.md` | Phases et suivi d'avancement |
 | `OPEN_QUESTIONS.md` | Questions ouvertes et choix par défaut appliqués |
+| `docs/operations/DEPLOYMENT.md` | Déploiement pilote, mise à jour, retour arrière, sauvegardes, surveillance |
 | `/api/v1/docs/` | Documentation interactive de l'API (OpenAPI), une fois le serveur lancé |
 
 ## Structure du dépôt
@@ -30,7 +31,9 @@ packages/shared/         libellés, formatage (montants, dates, surfaces) et rè
                          communs au Web et au mobile (TypeScript pur, sans dépendance)
 frontend/web/            client Web (React 19, TypeScript strict, Tailwind 4, IndexedDB/Dexie)
 mobile/app/              application mobile (Expo SDK 58, React Native, SQLite)
-docker-compose.yml       PostgreSQL 17, Redis, MinIO pour le développement
+docker-compose.yml       PostgreSQL 17 pour le développement (Redis réservé, profil « jobs »)
+deploy/                  pile du pilote : compose.pilot.yml, Caddyfile, .env.example
+scripts/                 sauvegarde (backup_db.sh) et restauration (restore_db.sh)
 ```
 
 ## Prérequis
@@ -84,6 +87,9 @@ Règles : les tests tournent sur un vrai PostgreSQL (pas SQLite), aucun test n'e
 | `DATABASE_URL` | Connexion PostgreSQL | `postgres://fms:fms@localhost:55432/fms` |
 | `DJANGO_SECRET_KEY` | Clé secrète (obligatoire) | — |
 | `JWT_ACCESS_MINUTES` / `JWT_REFRESH_DAYS` | Durée des jetons (Q16) | 15 / 30 |
+| `JWT_SIGNING_KEY` | Clé de signature des jetons, renouvelable séparément ; si elle est vide, la clé secrète est utilisée | `DJANGO_SECRET_KEY` |
+| `FMS_REFRESH_COOKIE_SECURE` | Cookie de rafraîchissement Web limité à HTTPS (Q26) | `true` (`false` en développement) |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Origine publique derrière le proxy (production), par exemple `https://pilote.example.org` | — |
 | `FMS_FILE_STORAGE_ROOT` | Stockage privé des fichiers | `backend/media` |
 | `FMS_AI_PROVIDER` | `null` (assistant désactivé) ou `anthropic` | `null` |
 | `FMS_AI_MODEL` | Modèle utilisé par l'adaptateur | `claude-opus-5-5` |
@@ -110,7 +116,22 @@ Sans fournisseur IA, toutes les fonctions restent disponibles en saisie manuelle
 | 11 | Application mobile (Expo SDK 58, SQLite, Expo Router) | ✅ |
 | 12 | Durcissement et déploiement pilote | 🚧 en cours |
 
-Bilan à ce stade : 782 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement et les parcours de l'interface d'administration), 15 tests du moteur de synchronisation, 27 tests du paquet partagé `@fms/shared`, 22 tests du client Web et 8 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
+Bilan à ce stade : 796 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement, les parcours de l'interface d'administration et le cookie de rafraîchissement), 15 tests du moteur de synchronisation, 27 tests du paquet partagé `@fms/shared`, 26 tests du client Web et 8 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
+
+### Déploiement pilote
+
+Serveur unique. Les commandes, la mise à jour, le retour arrière, les sauvegardes et la surveillance sont détaillés dans `docs/operations/DEPLOYMENT.md`.
+
+```bash
+cp deploy/.env.example deploy/.env        # domaine, e-mail ACME, secrets
+docker compose -f deploy/compose.pilot.yml --env-file deploy/.env up -d --build
+docker compose -f deploy/compose.pilot.yml --env-file deploy/.env run --rm backup   # sauvegarde
+```
+
+- **Composants** : Caddy (HTTPS automatique, client Web, en-têtes de sécurité, CSP stricte), API Django sous gunicorn (fichiers statiques de l'admin servis par WhiteNoise) et PostgreSQL 17. Seul le proxy est exposé.
+- **Migrations** : appliquées automatiquement avant chaque démarrage de l'API. En cas d'échec, l'ancienne version reste en place.
+- **Sauvegarde** : la base et les fichiers stockés sont sauvegardés ensemble. La restauration de la base se fait en une seule transaction.
+- **Session Web** : le jeton de rafraîchissement est dans un cookie `HttpOnly` (Q26). Aucun script ne peut le lire.
 
 ### Application mobile
 
@@ -198,7 +219,7 @@ uv run python manage.py createsuperuser   # depuis backend/
 ## Limites connues
 
 - Les appels IA sont synchrones : Celery n'est pas encore en place (Q24).
-- Côté Web, le jeton de rafraîchissement est stocké dans `localStorage`. Il doit passer en cookie `HttpOnly` lors du durcissement (Q26).
+- Pilote sur un serveur unique, sans haute disponibilité : la perte maximale correspond aux données saisies depuis la dernière sauvegarde quotidienne. Pendant une panne, les appareils continuent de fonctionner hors ligne.
 - Le stockage des fichiers est local en développement ; un stockage compatible S3 reste à configurer pour la production.
 - Les ventes sont modélisées comme des recettes liées au cycle cultural (Q23).
 - Le client Web couvre pour l'instant les écrans de terrain (parcelles, tâches, dépenses, synchronisation). La conception des plans, l'irrigation et les rapports passent par l'API (documentation `/api/v1/docs/`) en attendant leurs écrans.

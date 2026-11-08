@@ -1,0 +1,14 @@
+# Build context of the Web image (repository root). The API image uses backend/.dockerignore.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.git
+.idea
+.env
+.env.*
+backend
+mobile
+docs
+scripts
+backups

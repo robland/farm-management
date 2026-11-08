@@ -14,6 +14,7 @@ dependencies = [
     "argon2-cffi>=23.1",
     "pypdf>=7,<8",
     "gunicorn>=23,<24",
+    "whitenoise>=6.9,<7",
 ]
 
 [project.optional-dependencies]

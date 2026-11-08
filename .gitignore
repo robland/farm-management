@@ -27,3 +27,7 @@ coverage/
 *.tsbuildinfo
 # Generated OpenAPI export (served live at /api/v1/schema/)
 backend/openapi.yaml
+
+# Backups written by scripts/backup_db.sh (never in the repository)
+backups/
+deploy/backups/

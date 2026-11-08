@@ -1,9 +1,10 @@
 /**
  * HTTP client for the versioned REST API (/api/v1).
  *
- * The access token lives in memory only. The refresh token is kept in localStorage
- * for the MVP so that the app can resume after a reload while offline
- * (OPEN_QUESTIONS Q26: move to an HttpOnly cookie during hardening).
+ * The access token lives in memory only. The refresh token is in an HttpOnly cookie set
+ * by the server (OPEN_QUESTIONS Q26): no script can read it. localStorage only keeps a
+ * non-secret marker saying that a session exists, so that the app resumes after a reload
+ * while offline (FR-110) and knows when a refresh is worth trying.
  */
 
 import { AuthError, NetworkError } from "@fms/sync-core";
@@ -25,8 +26,13 @@ export class ApiError extends Error {
   }
 }
 
-const REFRESH_KEY = "fms.refresh";
+const SESSION_KEY = "fms.session";
+// Refresh token stored by versions before the cookie: sent once, then forgotten.
+const LEGACY_REFRESH_KEY = "fms.refresh";
+// Logout done offline: the server-side revocation of the cookie is retried later.
+const PENDING_LOGOUT_KEY = "fms.pendingLogout";
 const DEVICE_KEY = "fms.deviceId";
+const COOKIE_TRANSPORT = { "X-FMS-Token-Transport": "cookie" };
 
 export interface Session {
   userId: string;
@@ -45,8 +51,10 @@ export class ApiClient {
     private readonly storage: Storage = localStorage,
   ) {}
 
-  get hasRefreshToken(): boolean {
-    return this.storage.getItem(REFRESH_KEY) !== null;
+  get hasSession(): boolean {
+    return (
+      this.storage.getItem(SESSION_KEY) !== null || this.storage.getItem(LEGACY_REFRESH_KEY) !== null
+    );
   }
 
   deviceId(): string | null {
@@ -54,6 +62,7 @@ export class ApiClient {
   }
 
   async login(identifier: string, password: string): Promise<Session> {
+    if (this.storage.getItem(PENDING_LOGOUT_KEY)) await this.revokeCookie();
     const body = {
       identifier,
       password,
@@ -61,36 +70,54 @@ export class ApiClient {
       device_label: navigator.userAgent.slice(0, 100),
       ...(this.deviceId() ? { device_id: this.deviceId() } : {}),
     };
-    const data = await this.request<{ access: string; refresh: string; device_id: string;
-                                      user_id: string }>("POST", "/auth/login/", body, {
-      auth: false,
-    });
+    const data = await this.request<{ access: string; device_id: string; user_id: string }>(
+      "POST", "/auth/login/", body, { auth: false, headers: COOKIE_TRANSPORT });
     this.access = data.access;
-    this.storage.setItem(REFRESH_KEY, data.refresh);
+    this.storage.setItem(SESSION_KEY, "1");
+    this.storage.removeItem(LEGACY_REFRESH_KEY);
     this.storage.setItem(DEVICE_KEY, data.device_id);
     return { userId: data.user_id, deviceId: data.device_id };
   }
 
-  logout(): void {
+  /** Ends the session on this device at once; the server revocation follows when online. */
+  async logout(): Promise<void> {
+    this.clearSession();
+    this.storage.setItem(PENDING_LOGOUT_KEY, "1");
+    await this.revokeCookie();
+  }
+
+  private clearSession(): void {
     this.access = null;
-    this.storage.removeItem(REFRESH_KEY);
+    this.storage.removeItem(SESSION_KEY);
+    this.storage.removeItem(LEGACY_REFRESH_KEY);
+  }
+
+  private async revokeCookie(): Promise<void> {
+    try {
+      await this.request("POST", "/auth/logout/", {}, { auth: false, headers: COOKIE_TRANSPORT });
+      this.storage.removeItem(PENDING_LOGOUT_KEY);
+    } catch {
+      // Offline: kept pending. The marker is gone, so the app never uses that cookie again.
+    }
   }
 
   private async refresh(): Promise<boolean> {
-    const token = this.storage.getItem(REFRESH_KEY);
-    if (!token) return false;
+    if (!this.hasSession) return false;
+    const legacy = this.storage.getItem(LEGACY_REFRESH_KEY);
     this.refreshing ??= (async () => {
       try {
-        const data = await this.request<{ access: string; refresh?: string }>(
-          "POST", "/auth/refresh/", { refresh: token }, { auth: false });
+        const data = await this.request<{ access: string }>(
+          "POST", "/auth/refresh/", legacy ? { refresh: legacy } : {},
+          { auth: false, headers: COOKIE_TRANSPORT });
         this.access = data.access;
-        if (data.refresh) this.storage.setItem(REFRESH_KEY, data.refresh);
+        this.storage.setItem(SESSION_KEY, "1");
+        this.storage.removeItem(LEGACY_REFRESH_KEY);
         return true;
       } catch (error) {
-        // Offline is not an expired session: keep the refresh token and report the outage,
+        // Offline is not an expired session: keep the session and report the outage,
         // so the app keeps working on local data (FR-110).
         if (error instanceof NetworkError) throw error;
-        if (error instanceof ApiError) this.logout();
+        if (error instanceof ApiError) this.clearSession();
         return false;
       } finally {
         this.refreshing = null;

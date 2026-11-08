@@ -76,7 +76,7 @@ describe("App", () => {
   });
 
   it("validates the parcel form before recording", async () => {
-    localStorage.setItem("fms.refresh", "r");
+    localStorage.setItem("fms.session", "1");
     localStorage.setItem("fms.deviceId", "dev-1");
     localStorage.setItem("fms.me", JSON.stringify(ME));
     localStorage.setItem("fms.farm", "farm-1");

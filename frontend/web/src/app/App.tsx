@@ -105,7 +105,7 @@ function Shell(props: { farm: MeFarm; user: Me["user"]; store: DexieStore; api: 
 export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
   const [me, setMe] = useState<Me | null>(() => {
     const cached = localStorage.getItem(ME_CACHE);
-    return cached && api.hasRefreshToken ? (JSON.parse(cached) as Me) : null;
+    return cached && api.hasSession ? (JSON.parse(cached) as Me) : null;
   });
   const [farmId, setFarmId] = useState<string | null>(() => localStorage.getItem(FARM_KEY));
   const [error, setError] = useState<string | null>(null);
@@ -129,12 +129,12 @@ export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
   }, [api]);
 
   useEffect(() => {
-    if (api.hasRefreshToken) void loadMe();
+    if (api.hasSession) void loadMe();
     void requestPersistentStorage();
   }, [api, loadMe]);
 
   const logout = useCallback(() => {
-    api.logout();
+    void api.logout();
     localStorage.removeItem(ME_CACHE);
     setUnsentAtLogout(0);
     setMe(null);

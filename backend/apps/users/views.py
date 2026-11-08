@@ -1,4 +1,5 @@
-from typing import cast
+import contextlib
+from typing import Any, cast
 
 from django.contrib.auth.password_validation import validate_password
 from django.db.models import QuerySet
@@ -6,17 +7,18 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.audit.services import record_event
+from apps.users import cookies
 from apps.users.models import Device, User
 from apps.users.serializers import (
     ChangePasswordSerializer,
@@ -45,18 +47,57 @@ class LoginView(APIView):
             entity_type="users.device",
             entity_id=data["device_id"],
         )
-        return Response(LoginResponseSerializer(data).data)
+        response = Response(LoginResponseSerializer(data).data)
+        return (
+            cookies.move_refresh_to_cookie(response) if cookies.wants_cookie(request) else response
+        )
 
 
 class RefreshView(TokenRefreshView):
+    """Body token (mobile) or HttpOnly cookie (Web, `X-FMS-Token-Transport: cookie`)."""
+
     serializer_class = DeviceAwareTokenRefreshSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth"
 
+    def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        if not cookies.wants_cookie(request):
+            return super().post(request, *args, **kwargs)
+        # A token still held by an older Web client (localStorage) is accepted once and
+        # moved to the cookie: the transition does not log anyone out.
+        body = request.data if isinstance(request.data, dict) else {}
+        token = body.get("refresh") or cookies.refresh_from_cookie(request)
+        if not token:
+            raise NotAuthenticated("Session absente ou expirée.")
+        serializer = self.get_serializer(data={"refresh": token})
+        try:
+            try:
+                serializer.is_valid(raise_exception=True)
+            except TokenError as exc:
+                raise InvalidToken(exc.args[0]) from exc
+        except (InvalidToken, AuthenticationFailed, ValidationError) as exc:
+            # Expired, reused token or revoked device: the uniform error body, cookie cleared.
+            return cookies.clear_refresh_cookie(self.handle_exception(exc))
+        return cookies.move_refresh_to_cookie(Response(dict(serializer.validated_data)))
+
 
 class LogoutView(APIView):
+    """Revoke a refresh token. In cookie mode, the cookie itself proves the session."""
+
+    def get_permissions(self) -> list[Any]:
+        if cookies.wants_cookie(self.request):
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
     @extend_schema(request=LogoutSerializer, responses={204: None})
     def post(self, request: Request) -> Response:
+        if cookies.wants_cookie(request):
+            raw = cookies.refresh_from_cookie(request)
+            if raw:
+                # Already expired or revoked: the goal is reached all the same.
+                with contextlib.suppress(TokenError):
+                    RefreshToken(cast(Any, raw)).blacklist()
+            return cookies.clear_refresh_cookie(Response(status=status.HTTP_204_NO_CONTENT))
         serializer = LogoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:

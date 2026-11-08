@@ -477,7 +477,7 @@ Règles : PostgreSQL réel en CI (service Docker), seuil de couverture sur `agro
 
 ## 13. Stratégie de déploiement
 
-- **Développement** : `docker compose up` lance PostgreSQL, Redis et MinIO. Le backend peut tourner en local (uv) ou en conteneur. Données de démonstration générées par script (aucune donnée agronomique inventée : jeux de test clairement marqués comme fictifs).
+- **Développement** : `docker compose up -d db` lance PostgreSQL (Redis est réservé à Celery, profil « jobs » ; le stockage S3 n'est pas utilisé en développement). Le backend peut tourner en local (uv) ou en conteneur. Données de démonstration générées par script (aucune donnée agronomique inventée : jeux de test clairement marqués comme fictifs).
 - **CI** (GitHub Actions, à confirmer) : ruff, mypy, pytest (PostgreSQL), génération et vérification d'OpenAPI (différence de contrat), lint et typecheck TypeScript, Vitest, build Web, audits de dépendances.
 - **Environnements** : `dev`, `staging` (données anonymisées), `prod`.
 - **Production initiale** (proposition) : un VPS ou une machine gérée, avec Docker Compose, Caddy (TLS automatique), Gunicorn, worker Celery, PostgreSQL géré ou conteneur avec sauvegardes, et stockage S3 compatible. Le choix de la région se fait selon la latence vers Brazzaville et la conformité.
@@ -485,6 +485,7 @@ Règles : PostgreSQL réel en CI (service Docker), seuil de couverture sur `agro
 - **Migrations** : contrôlées et réversibles quand c'est possible, revue obligatoire, stratégie « expand/contract » pour éviter de casser les clients hors ligne qui utilisent une ancienne version.
 - **Compatibilité des clients** : l'en-tête `X-Client-Version` est envoyé à chaque requête. Le serveur maintient la compatibilité du protocole de synchronisation sur N-1 versions, et une version trop ancienne reçoit `426` avec une invitation à mettre à jour **sans perte de la file locale**.
 - **Mobile** : builds EAS, mises à jour OTA (expo-updates) pour le JavaScript, en respectant la compatibilité du schéma SQLite local (migrations locales versionnées).
+- **Pilote (mis en œuvre, phase 12)** : `deploy/compose.pilot.yml` sur un serveur unique. Composants : Caddy (TLS automatique, client Web, CSP stricte), gunicorn avec WhiteNoise, PostgreSQL 17 en conteneur, migrations exécutées avant le démarrage, sauvegarde quotidienne de la base et des fichiers, restauration transactionnelle. Le guide est dans `docs/operations/DEPLOYMENT.md`. Écarts avec la proposition ci-dessus : pas de worker Celery (Q24), fichiers sur un volume local plutôt que S3, sauvegardes **non chiffrées** à l'écriture (le chiffrement repose sur la copie externe ; à ajouter), pas d'archivage WAL.
 - **Observabilité** : logs JSON structurés avec `request_id`, Sentry (à confirmer), métriques de synchronisation (longueur des files, taux de conflits, échecs).
 
 ---

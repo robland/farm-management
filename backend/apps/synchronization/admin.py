@@ -1,6 +1,10 @@
+from django import forms
 from django.contrib import admin
 
 from apps.core.admin import ReadOnlyAdmin
+from apps.core.admin_services import ServiceAdmin, service_action
+from apps.core.tenancy import TenantContext
+from apps.synchronization import services
 from apps.synchronization.models import ChangeLog, FarmSyncState, SyncConflict, SyncOperationReceipt
 
 
@@ -31,9 +35,24 @@ class SyncOperationReceiptAdmin(ReadOnlyAdmin):
     show_full_result_count = False
 
 
+class ResolveForm(forms.Form):
+    resolution = forms.ChoiceField(
+        label="Résolution",
+        choices=[*SyncConflict.Resolution.choices, ("dismiss", "Ignorer")],
+    )
+    note = forms.CharField(label="Note", required=False)
+
+
 @admin.register(SyncConflict)
-class SyncConflictAdmin(ReadOnlyAdmin):
+class SyncConflictAdmin(ServiceAdmin):
+    """Conflicts are shown explicitly and resolved by a person (CLAUDE.md §8)."""
+
     list_display = ["entity_type", "entity_id", "conflict_type", "status", "farm", "created_at"]
     list_select_related = ["farm"]
     search_fields = ["=entity_id", "entity_type"]
     list_filter = ["status", "conflict_type", "resolution"]
+    actions = ["resolve"]
+
+    @service_action("Résoudre les conflits", form=ResolveForm)
+    def resolve(self, ctx: TenantContext, obj: SyncConflict, resolution: str, note: str) -> None:
+        services.resolve_conflict(ctx, conflict_id=obj.id, resolution=resolution, note=note)

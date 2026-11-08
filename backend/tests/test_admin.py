@@ -1,4 +1,4 @@
-"""Django admin: every model is consultable, business data stays read-only (Q28)."""
+"""Django admin: every model is consultable; writes never bypass the services (Q34)."""
 
 import uuid
 
@@ -56,6 +56,14 @@ def test_changelist_search_and_detail_render(populated, superuser_client, model)
         assert superuser_client.get(_admin_url(model, "change", obj.pk)).status_code == 200
 
 
+@pytest.mark.parametrize("model", PROJECT_MODELS, ids=lambda m: m._meta.label)
+def test_add_page_renders_when_creation_is_offered(populated, superuser_client, model) -> None:
+    model_admin = admin.site._registry[model]
+    request = superuser_client.get(_admin_url(model, "changelist")).wsgi_request
+    expected = 200 if model_admin.has_add_permission(request) else 403
+    assert superuser_client.get(_admin_url(model, "add")).status_code == expected
+
+
 def test_derived_admin_searches_by_exact_id(populated, superuser_client) -> None:
     parcels = list(Parcel.objects.all()[:2])
     assert len(parcels) == 2
@@ -69,12 +77,11 @@ def test_most_models_have_a_rendered_detail_page(populated) -> None:
     assert len(with_objects) >= len(PROJECT_MODELS) // 2
 
 
-def test_financial_transactions_cannot_be_added_changed_or_deleted(
-    populated, superuser_client
-) -> None:
-    tx = FinancialTransaction.objects.first()
+def test_validated_transactions_cannot_be_changed_or_deleted(populated, superuser_client) -> None:
+    tx = FinancialTransaction.objects.filter(status=FinancialTransaction.Status.VALIDATED).first()
     assert tx is not None
-    assert superuser_client.get(_admin_url(FinancialTransaction, "add")).status_code == 403
+    # Recording goes through the service (see test_admin_flows); deletion never exists.
+    assert superuser_client.get(_admin_url(FinancialTransaction, "add")).status_code == 200
     assert (
         superuser_client.get(_admin_url(FinancialTransaction, "delete", tx.pk)).status_code == 403
     )
@@ -136,14 +143,19 @@ def test_global_crop_is_created_and_edited_with_audit(superuser_client) -> None:
     assert event.after == {"family": "Malvaceae", "scientific_name": ""}
 
 
-def test_organization_crop_is_read_only_in_admin(world, superuser_client) -> None:
+def test_organization_crop_is_edited_through_the_service(world, superuser_client) -> None:
     crop = make_crop(world.org_a, name="Culture privée")
     response = superuser_client.post(
-        _admin_url(Crop, "change", crop.pk), {"common_name": "Renommée", "category": "other"}
+        _admin_url(Crop, "change", crop.pk),
+        {"common_name": "Renommée", "category": "other", "expected_version": crop.version},
     )
-    assert response.status_code == 403
+    assert response.status_code == 302
     crop.refresh_from_db()
-    assert crop.common_name == "Culture privée"
+    assert crop.common_name == "Renommée" and crop.version == 2
+    assert crop.organization_id == world.org_a.id
+    assert AuditEvent.objects.filter(action="crop.updated", entity_id=crop.id).exists()
+    # Shared catalogue crops cannot be deleted; an organization's crop can (service rules).
+    assert superuser_client.get(_admin_url(Crop, "delete", crop.pk)).status_code == 200
 
 
 def test_user_deactivation_is_audited(world, superuser_client) -> None:

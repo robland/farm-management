@@ -110,7 +110,7 @@ Sans fournisseur IA, toutes les fonctions restent disponibles en saisie manuelle
 | 11 | Application mobile (Expo SDK 58, SQLite, Expo Router) | ✅ |
 | 12 | Durcissement et déploiement pilote | 🚧 en cours |
 
-Bilan à ce stade : 627 tests backend (dont le scénario MVP complet de bout en bout et la génération du schéma OpenAPI sans avertissement), 15 tests du moteur de synchronisation, 15 tests du paquet partagé `@fms/shared`, 20 tests du client Web et 7 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
+Bilan à ce stade : 782 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement et les parcours de l'interface d'administration), 15 tests du moteur de synchronisation, 15 tests du paquet partagé `@fms/shared`, 29 tests du client Web et 7 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
 
 ### Application mobile
 
@@ -142,12 +142,33 @@ uv run python manage.py createsuperuser   # depuis backend/
 ```
 
 - **Tous les modèles sont consultables** : listes avec filtres (statut, type, éléments supprimés), recherche par nom ou par identifiant exact, organisation et exploitation affichées, lignes liées sur la fiche (écritures d'une transaction, nomenclature d'une conception, articles d'un tarif, historique des statuts d'une tâche, consommation IA…).
-- **Les données métier sont en lecture seule.** Les modifications passent par les services : permissions, versions, journal d'audit et journal de synchronisation (Q28). Modifier une parcelle depuis l'admin ne serait jamais redescendu aux clients hors ligne. Une transaction financière ne se modifie pas : elle s'annule ou se corrige par l'API.
-- **Seules exceptions**, toutes inscrites au journal d'audit :
-  - le référentiel commun des cultures, qu'aucune API ne permet de créer. Les cultures d'une organisation restent en lecture seule ;
-  - les comptes utilisateurs : activation, nom et langue. Les droits `is_staff` et `is_superuser` ne peuvent être donnés que par un superutilisateur ;
-  - la révocation d'appareils (téléphone perdu), proposée comme action.
-- Les secrets (mot de passe haché, jeton d'invitation haché) ne sont jamais affichés. Un membre du personnel sans droit de consultation sur un modèle reçoit un refus (403).
+- **Création, modification, suppression et parcours métier depuis l'admin, toujours par les services** (Q34). L'admin n'écrit jamais directement dans les tables. Il appelle le même service que l'API, avec les droits de l'organisation concernée. Les garanties restent donc les mêmes :
+  - **version** : le formulaire envoie la version affichée ; une modification faite entre-temps est refusée, sans écrasement ;
+  - **cohérence** : une référence d'une autre organisation ou exploitation est refusée. Les listes déroulantes d'une fiche n'offrent que celles de son exploitation ; pour une création, `?farm=<id>` (ou `?organization=<id>`) dans l'adresse filtre les listes ;
+  - **traçabilité** : journal d'audit au nom du membre du personnel, et journal de synchronisation (les appareils hors ligne reçoivent les changements) ;
+  - **pas de doublon** : les formulaires de saisie (parcelles, observations, comptes rendus, récoltes, transactions, solde d'ouverture) portent un identifiant généré à l'affichage. Un double clic rejoue la première saisie ;
+  - **suppression** : une à une, par le service (marque de suppression pour les parcelles et champs). La suppression en masse est retirée.
+- **Parcours disponibles** (actions de la liste, à appliquer aux lignes cochées) :
+
+  | Domaine | Création / modification | Actions |
+  |---|---|---|
+  | Organisations | organisation (avec son administrateur), rôles et permissions, membres, invitations (jeton affiché une seule fois) | révoquer une invitation |
+  | Exploitations | exploitation, membres et rôles | — |
+  | Terrain | champs, parcelles, historique cultural | — |
+  | Référentiels | cultures (commun ou propre), variétés, fiches techniques (envoi du PDF), jeux et éléments de données techniques | valider des éléments, valider un jeu, extraction par l'IA |
+  | Catalogue | fournisseurs, articles, tarifs, prix (tarif brouillon) | — |
+  | Plans | campagnes, plans, en-tête de version, spécification de plantation, affectations de parcelles, phases | préremplir, calculer, recalculer le programme, valider, nouvelle version, générer les tâches |
+  | Programme agronomique | produits, fertilisations, traitements, irrigation planifiée, observations | — |
+  | Irrigation | conceptions, lignes manuelles, liaison au catalogue, devis, prix des lignes | calculer, valider, nouvelle version ; émettre, décision du client |
+  | Tâches | équipes, tâches, comptes rendus | changer le statut, affecter |
+  | Finance | comptes, catégories, dépenses, recettes, transferts, modification d'une transaction soumise, lignes budgétaires, ventilations | valider, rejeter, annuler, corriger (motif obligatoire), solde d'ouverture |
+  | Récoltes | conversions mesurées, récoltes | annuler une récolte (motif) |
+  | Synchronisation | — | résoudre un conflit |
+  | IA | — | décider d'une suggestion (accepter, rejeter, modifier) |
+
+- **Ce qui reste impossible, même pour un superutilisateur** : modifier ou supprimer une transaction validée (annulation ou correction seulement), modifier une version de plan, une conception ou un jeu de données validés, modifier un tarif actif. Les journaux (audit, synchronisation, écritures, appels IA) sont en lecture seule.
+- **Comptes** : activation, nom et langue, avec audit. Seul un superutilisateur peut donner `is_staff` ou `is_superuser`. Les appareils peuvent être révoqués (téléphone perdu).
+- **Droits** : chaque membre du personnel a besoin des droits Django du modèle (`view_`, `add_`, `change_`, `delete_`). Les actions demandent le droit `change_`. Sans droit, la réponse est 403. Les secrets (mot de passe haché, jeton d'invitation haché) ne sont jamais affichés.
 
 ### Ergonomie commune (Web et mobile)
 
@@ -155,10 +176,18 @@ uv run python manage.py createsuperuser   # depuis backend/
 - **Confirmations** : terminer une tâche (avec notes facultatives), abandonner une saisie et se déconnecter avec des saisies non envoyées demandent une confirmation. Sur le Web, Échap annule.
 - **Langage clair** : l'écran Synchronisation décrit chaque saisie (« Dépense de 15 000 XAF », « Tâche : À faire → En cours ») et explique les refus du serveur. Le contenu est résumé, sans JSON brut. Les rôles et statuts sont traduits.
 - **Formats français** : montants groupés à la précision de la devise, sans calcul en virgule flottante. Dates « 8 nov. 2026 », surfaces en m² avec leur équivalent en hectares.
-- **Retour après enregistrement** : un message confirme que la saisie est conservée sur l'appareil et sera envoyée.
+- **Notifications (Web)** : une cloche avec un compteur de notifications non lues est présente sur tous les écrans dès la connexion, y compris le choix d'exploitation. Le panneau regroupe :
+  - les problèmes de synchronisation (saisie refusée, erreur locale) ;
+  - les incohérences à vérifier (conflits) ;
+  - les succès (saisie enregistrée sur l'appareil, saisies envoyées, exploitation créée) ;
+  - les nouvelles informations (tâches planifiées reçues à la synchronisation).
+
+  Le panneau propose des filtres par type et l'action « Tout marquer comme lu ». L'historique est conservé dans le navigateur, par utilisateur, avec 50 notifications au plus. La file de synchronisation reste la référence.
+- **Profil (Web)** : un bouton rond aux initiales ouvre le menu du compte (nom, contact, rôle). La déconnexion se trouve dans ce menu.
+- **Création d'exploitation (Web)** : sur l'écran de choix, regroupé par organisation, le bouton « Créer une exploitation » n'apparaît que pour les administrateurs de l'organisation (droit `org.manage`). Le formulaire est prérempli avec le pays, la devise et le fuseau de l'organisation. La création nécessite le réseau.
 - **Tâches** regroupées en « En retard », « Du jour », « À venir » ; la date du jour est celle du fuseau de l'appareil.
 - **Raccourcis** : une exploitation, un compte ou une parcelle unique est présélectionné.
-- **Petits écrans et terrain** : zones tactiles d'au moins 44 px (Web) ou 48 dp (mobile), focus clavier visible. Sur mobile, les boutons répondent dès la première pression avec le clavier ouvert, et on peut tirer vers le bas pour synchroniser.
+- **Petits écrans et terrain** : sur le Web, les boutons font 44 px de haut sur téléphone et 36 px à partir de 640 px de large. Sur mobile, les zones tactiles font 48 dp. Le focus clavier est visible. Le mot de passe s'affiche ou se masque avec une icône œil. Sur mobile, les boutons répondent dès la première pression avec le clavier ouvert, et on peut tirer vers le bas pour synchroniser.
 - Les libellés et le formatage sont dans `packages/shared`, testés une seule fois pour les deux clients.
 
 ## Limites connues

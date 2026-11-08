@@ -1,9 +1,9 @@
-"""Django admin: platform-staff consultation of the business data (OPEN_QUESTIONS Q28).
+"""Django admin for platform staff (OPEN_QUESTIONS Q34): consultation building blocks.
 
-Business writes go through the services, which enforce permissions, optimistic
-versions, the audit trail and the synchronisation change log. An admin form would
-bypass all of them, so business models are registered **read-only**; the few
-editable admins (users, global crop catalogue) audit every change explicitly.
+A plain model admin form would bypass the services (permissions, optimistic versions,
+audit trail, synchronisation change log). `ReadOnlyAdmin` is therefore view-only;
+writes are added by `apps.core.admin_services.ServiceAdmin`, which delegates every
+creation, change, deletion and workflow action to the business services.
 
 `ReadOnlyAdmin` derives a sensible change list from the model when an attribute
 is not set explicitly: title/status columns, organisation and farm scope,

@@ -1,5 +1,6 @@
 /** Reusable presentation components (no business logic). */
 
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { LOCAL_STATE_LABELS } from "@fms/shared";
 import type { OpStatus } from "@fms/sync-core";
 import { type ReactNode, type Ref, useCallback, useRef, useState } from "react";
@@ -11,8 +12,8 @@ export const colors = { primary: "#15803d", primaryDark: "#166534", primarySoft:
                         background: "#fafaf9", warn: "#fef3c7", warnText: "#78350f", text: "#1c1917",
                         offline: "#57534e" };
 
-/** Minimum touch target (Android guideline 48 dp), for use with gloves or in the sun. */
-const TOUCH = 48;
+/** Minimum touch target (44 dp, as in the phone mockups; WCAG 2.5.5). */
+const TOUCH = 44;
 
 export function Button(props: { title: string; onPress: () => void;
                                 variant?: "primary" | "secondary" | "danger"; disabled?: boolean;
@@ -54,7 +55,7 @@ export function Field(props: TextInputProps & { label: string; error?: string | 
   );
 }
 
-/** Password with a show/hide toggle: typing errors are frequent on a phone. */
+/** Password with an eye toggle inside the field: typing errors are frequent on a phone. */
 export function PasswordField(props: Omit<TextInputProps, "secureTextEntry">
   & { label: string; ref?: Ref<TextInputInstance> }): ReactNode {
   const { label, ref, ...rest } = props;
@@ -62,16 +63,40 @@ export function PasswordField(props: Omit<TextInputProps, "secureTextEntry">
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <View style={styles.inline}>
+      <View style={styles.passwordBox}>
         <TextInput ref={ref} accessibilityLabel={label} secureTextEntry={!visible} autoCapitalize="none"
-                   autoCorrect={false} style={[styles.input, { flex: 1 }]} {...rest} />
+                   autoCorrect={false} style={[styles.input, { paddingRight: TOUCH + 4 }]} {...rest} />
         <Pressable accessibilityRole="button" accessibilityState={{ selected: visible }}
                    accessibilityLabel={visible ? "Masquer le mot de passe" : "Afficher le mot de passe"}
-                   onPress={() => setVisible(!visible)} style={styles.toggle}>
-          <Text style={styles.link}>{visible ? "Masquer" : "Afficher"}</Text>
+                   onPress={() => setVisible(!visible)} hitSlop={4} style={styles.eye}>
+          <Ionicons name={visible ? "eye-off-outline" : "eye-outline"} size={22} color={colors.muted} />
         </Pressable>
       </View>
     </View>
+  );
+}
+
+/** Round icon-only button with an optional unread count (the label is mandatory). */
+export function IconButton(props: { label: string; icon: keyof typeof Ionicons.glyphMap; onPress: () => void;
+                                    badge?: number }): ReactNode {
+  const badge = props.badge ?? 0;
+  return (
+    <Pressable accessibilityRole="button" hitSlop={4} onPress={props.onPress}
+               accessibilityLabel={badge ? `${props.label}, ${badge} non lue${badge > 1 ? "s" : ""}` : props.label}
+               style={({ pressed }) => [styles.round, styles.roundOutline, pressed && styles.pressed]}>
+      <Ionicons name={props.icon} size={20} color={colors.text} />
+      {badge ? <Text style={styles.roundBadge}>{badge > 99 ? "99+" : badge}</Text> : null}
+    </Pressable>
+  );
+}
+
+/** Round avatar with the user's initials; opens the profile. */
+export function Avatar(props: { initials: string; label: string; onPress: () => void }): ReactNode {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={props.label} hitSlop={4} onPress={props.onPress}
+               style={({ pressed }) => [styles.round, { backgroundColor: colors.primaryDark }, pressed && styles.pressed]}>
+      <Text style={{ color: "white", fontWeight: "700", fontSize: 14 }}>{props.initials}</Text>
+    </Pressable>
   );
 }
 
@@ -134,19 +159,6 @@ export function Empty(props: { children: string; hint?: string; action?: { title
   );
 }
 
-/** Confirmation after a local save, announced by screen readers. */
-export function Notice({ message, onClose }: { message: string | null; onClose: () => void }): ReactNode {
-  if (!message) return null;
-  return (
-    <View accessibilityLiveRegion="polite" style={styles.notice}>
-      <Text style={{ flex: 1, color: colors.primaryDark }}>{message}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Fermer" onPress={onClose} hitSlop={12}>
-        <Text style={{ color: colors.primaryDark, fontSize: 18 }}>×</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 export function SectionTitle({ children, color }: { children: string; color?: string }): ReactNode {
   return <Text accessibilityRole="header" style={[styles.section, color ? { color } : null]}>{children}</Text>;
 }
@@ -181,7 +193,7 @@ export const styles = StyleSheet.create({
   card: { backgroundColor: "white", borderColor: colors.border, borderWidth: 1, borderRadius: 10,
           padding: 12, gap: 8 },
   muted: { color: colors.muted },
-  button: { borderRadius: 8, minHeight: TOUCH, paddingVertical: 12, paddingHorizontal: 14,
+  button: { borderRadius: 8, minHeight: TOUCH, paddingVertical: 10, paddingHorizontal: 14,
             alignItems: "center", justifyContent: "center" },
   buttonRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   primary: { backgroundColor: colors.primary },
@@ -199,9 +211,17 @@ export const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, minHeight: TOUCH,
            backgroundColor: "white", fontSize: 16, color: colors.text },
   multiline: { minHeight: 88, textAlignVertical: "top" },
-  inline: { flexDirection: "row", alignItems: "center", gap: 8 },
-  toggle: { minHeight: TOUCH, justifyContent: "center", paddingHorizontal: 8 },
+  passwordBox: { position: "relative", justifyContent: "center" },
+  eye: { position: "absolute", right: 0, width: TOUCH, height: TOUCH, alignItems: "center",
+         justifyContent: "center" },
+  round: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  roundOutline: { borderWidth: 1, borderColor: colors.border, backgroundColor: "white" },
+  roundBadge: { position: "absolute", top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9,
+                paddingHorizontal: 4, backgroundColor: colors.danger, color: "white", fontSize: 11,
+                fontWeight: "700", textAlign: "center", lineHeight: 15, borderWidth: 1.5, borderColor: "white",
+                overflow: "hidden" },
   link: { color: colors.primaryDark, fontWeight: "600" },
+  menuRow: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: TOUCH + 8 },
   error: { color: colors.danger },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { borderWidth: 1, borderColor: colors.border, borderRadius: 22, minHeight: 44, justifyContent: "center",
@@ -212,6 +232,4 @@ export const styles = StyleSheet.create({
            fontSize: 12, overflow: "hidden" },
   emptyBox: { gap: 12, padding: 24, alignItems: "stretch" },
   empty: { textAlign: "center", color: colors.muted, fontSize: 16 },
-  notice: { flexDirection: "row", gap: 8, alignItems: "flex-start", backgroundColor: colors.primarySoft,
-            borderRadius: 8, padding: 12 },
 });

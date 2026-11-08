@@ -1,33 +1,10 @@
-import { CURRENCY_DECIMALS } from "@fms/shared";
+import { CURRENCY_DECIMALS, type FarmForm, farmPayload, validateFarm } from "@fms/shared";
 import { NetworkError } from "@fms/sync-core";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 
 import { ApiError, type ApiClient } from "../../api/client";
 import { Button, ErrorMessage, Field, Select, useBusy } from "../../ui/components";
 import { type Errors, hasErrors } from "../validation";
-
-export interface FarmForm {
-  name: string;
-  code: string;
-  country: string;
-  timezone: string;
-  currency: string;
-}
-
-const SLUG = /^[-a-zA-Z0-9_]+$/;
-
-/** Early feedback only: the server validates and enforces org.manage. */
-export function validateFarm(form: FarmForm): Errors<FarmForm> {
-  const errors: Errors<FarmForm> = {};
-  if (!form.name.trim()) errors.name = "Nom obligatoire.";
-  if (!form.code.trim()) errors.code = "Code obligatoire.";
-  else if (form.code.trim().length > 32) errors.code = "32 caractères au maximum.";
-  else if (!SLUG.test(form.code.trim())) errors.code = "Lettres sans accent, chiffres, - et _ uniquement.";
-  if (!/^[A-Za-z]{2}$/.test(form.country.trim())) errors.country = "Code pays à 2 lettres (ISO 3166), ex. CM.";
-  if (!form.timezone.trim()) errors.timezone = "Fuseau horaire obligatoire.";
-  if (!form.currency) errors.currency = "Devise obligatoire.";
-  return errors;
-}
 
 interface OrganizationDefaults { country?: string; default_currency?: string; default_timezone?: string }
 
@@ -66,10 +43,7 @@ export function CreateFarmDialog(props: { api: ApiClient; organization: { id: st
       if (hasErrors(found)) return;
       setError(null);
       try {
-        await api.request("POST", `/organizations/${organization.id}/farms/`, {
-          name: form.name.trim(), code: form.code.trim(), country: form.country.trim().toUpperCase(),
-          timezone: form.timezone.trim(), currency: form.currency,
-        });
+        await api.request("POST", `/organizations/${organization.id}/farms/`, farmPayload(form));
         props.onCreated(form.name.trim());
       } catch (err) {
         if (err instanceof NetworkError) {

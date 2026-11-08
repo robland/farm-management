@@ -110,7 +110,7 @@ Sans fournisseur IA, toutes les fonctions restent disponibles en saisie manuelle
 | 11 | Application mobile (Expo SDK 58, SQLite, Expo Router) | ✅ |
 | 12 | Durcissement et déploiement pilote | 🚧 en cours |
 
-Bilan à ce stade : 782 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement et les parcours de l'interface d'administration), 15 tests du moteur de synchronisation, 15 tests du paquet partagé `@fms/shared`, 29 tests du client Web et 7 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
+Bilan à ce stade : 782 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement et les parcours de l'interface d'administration), 15 tests du moteur de synchronisation, 27 tests du paquet partagé `@fms/shared`, 22 tests du client Web et 8 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
 
 ### Application mobile
 
@@ -125,6 +125,11 @@ npm test
 - L'adresse de l'API se règle dans `app.json` → `expo.extra.apiBaseUrl` (par défaut `http://10.0.2.2:8000/api/v1`, c'est-à-dire la machine hôte vue depuis l'émulateur Android).
 - Le jeton de rafraîchissement, l'identifiant d'appareil et l'utilisateur courant sont dans le stockage sécurisé du système (SecureStore). La file d'opérations, les données et le profil en cache sont dans une base SQLite propre à chaque utilisateur.
 - Écrans de terrain : tâches (démarrer, terminer avec compte rendu), observations, récoltes, dépenses et synchronisation (réessayer ou abandonner). Toutes les saisies fonctionnent hors ligne.
+- Dès la connexion, l'en-tête de chaque écran porte la cloche des notifications et le bouton profil.
+  - La cloche ouvre l'écran Notifications, avec ses filtres, son action « Tout marquer comme lu » et des liens vers Tâches, Synchronisation et Dépense. L'historique est conservé dans la base SQLite de l'utilisateur.
+  - Le bouton profil ouvre l'écran Profil (nom, contact, rôle). On peut y changer d'exploitation et s'y déconnecter, avec une confirmation s'il reste des saisies non envoyées.
+- Sur le choix d'exploitation, les exploitations sont regroupées par organisation. « Créer une exploitation » est réservé aux administrateurs de l'organisation ; la création nécessite le réseau.
+- Icônes : `@expo/vector-icons` (Ionicons), avec `expo-font`, qu'elle requiert.
 
 ### Client Web
 
@@ -176,15 +181,15 @@ uv run python manage.py createsuperuser   # depuis backend/
 - **Confirmations** : terminer une tâche (avec notes facultatives), abandonner une saisie et se déconnecter avec des saisies non envoyées demandent une confirmation. Sur le Web, Échap annule.
 - **Langage clair** : l'écran Synchronisation décrit chaque saisie (« Dépense de 15 000 XAF », « Tâche : À faire → En cours ») et explique les refus du serveur. Le contenu est résumé, sans JSON brut. Les rôles et statuts sont traduits.
 - **Formats français** : montants groupés à la précision de la devise, sans calcul en virgule flottante. Dates « 8 nov. 2026 », surfaces en m² avec leur équivalent en hectares.
-- **Notifications (Web)** : une cloche avec un compteur de notifications non lues est présente sur tous les écrans dès la connexion, y compris le choix d'exploitation. Le panneau regroupe :
+- **Notifications (Web et mobile)** : une cloche avec un compteur de notifications non lues est présente sur tous les écrans dès la connexion, y compris le choix d'exploitation. Le panneau regroupe :
   - les problèmes de synchronisation (saisie refusée, erreur locale) ;
   - les incohérences à vérifier (conflits) ;
   - les succès (saisie enregistrée sur l'appareil, saisies envoyées, exploitation créée) ;
   - les nouvelles informations (tâches planifiées reçues à la synchronisation).
 
   Le panneau propose des filtres par type et l'action « Tout marquer comme lu ». L'historique est conservé dans le navigateur, par utilisateur, avec 50 notifications au plus. La file de synchronisation reste la référence.
-- **Profil (Web)** : un bouton rond aux initiales ouvre le menu du compte (nom, contact, rôle). La déconnexion se trouve dans ce menu.
-- **Création d'exploitation (Web)** : sur l'écran de choix, regroupé par organisation, le bouton « Créer une exploitation » n'apparaît que pour les administrateurs de l'organisation (droit `org.manage`). Le formulaire est prérempli avec le pays, la devise et le fuseau de l'organisation. La création nécessite le réseau.
+- **Profil (Web et mobile)** : un bouton rond aux initiales ouvre le compte (nom, contact, rôle). La déconnexion s'y trouve : dans un menu sur le Web, sur l'écran Profil sur mobile.
+- **Création d'exploitation (Web et mobile)** : sur l'écran de choix, regroupé par organisation, le bouton « Créer une exploitation » n'apparaît que pour les administrateurs de l'organisation (droit `org.manage`). Le formulaire est prérempli avec le pays, la devise et le fuseau de l'organisation. La création nécessite le réseau.
 - **Tâches** regroupées en « En retard », « Du jour », « À venir » ; la date du jour est celle du fuseau de l'appareil.
 - **Raccourcis** : une exploitation, un compte ou une parcelle unique est présélectionné.
 - **Petits écrans et terrain** : sur le Web, les boutons font 44 px de haut sur téléphone et 36 px à partir de 640 px de large. Sur mobile, les zones tactiles font 48 dp. Le focus clavier est visible. Le mot de passe s'affiche ou se masque avec une icône œil. Sur mobile, les boutons répondent dès la première pression avec le clavier ouvert, et on peut tirer vers le bas pour synchroniser.

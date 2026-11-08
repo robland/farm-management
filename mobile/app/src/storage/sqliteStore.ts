@@ -120,6 +120,13 @@ export class SqliteStore implements SyncStore {
     await this.db.runAsync("DELETE FROM operations WHERE op_id = ?", [opId]);
   }
 
+  /** Operations not yet confirmed by the server, all farms (warning before logout). */
+  async countUnsent(): Promise<number> {
+    const row = await this.db.getFirstAsync<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM operations WHERE status != 'synced'", []);
+    return row?.n ?? 0;
+  }
+
   async listOperations(farmId: string): Promise<LocalOperation[]> {
     const rows = await this.db.getAllAsync<{ body: string }>(
       "SELECT body FROM operations WHERE farm_id = ? ORDER BY created_at", [farmId]);

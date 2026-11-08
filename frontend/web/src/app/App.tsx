@@ -1,4 +1,4 @@
-import { roleLabel } from "@fms/shared";
+import { type NotificationTarget, roleLabel } from "@fms/shared";
 import { AuthError, NetworkError, SyncEngine } from "@fms/sync-core";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -10,7 +10,6 @@ import { ExpensesPage } from "../features/finance/ExpensesPage";
 import { ParcelsPage } from "../features/parcels/ParcelsPage";
 import { SyncPage } from "../features/sync/SyncPage";
 import { TasksPage } from "../features/tasks/TasksPage";
-import type { NotificationTab } from "../notifications/model";
 import { NotificationsProvider } from "../notifications/NotificationsContext";
 import { DexieStore, requestPersistentStorage } from "../storage/dexieStore";
 import { SyncProvider, useSync } from "../sync/SyncContext";
@@ -22,7 +21,7 @@ const ME_CACHE = "fms.me";
 const FARM_KEY = "fms.farm";
 const TAB_KEY = "fms.tab";
 
-type Tab = NotificationTab;
+type Tab = NotificationTarget;
 
 /** Remembered tab: a convenience only, so storage failures are ignored. */
 function readTab(): string | null {

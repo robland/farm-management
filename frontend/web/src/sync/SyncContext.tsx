@@ -16,7 +16,8 @@ import {
   useState,
 } from "react";
 
-import { syncNotifications } from "../notifications/fromSync";
+import { localSyncErrorNotification, syncNotifications } from "@fms/shared";
+
 import { useNotifications } from "../notifications/NotificationsContext";
 
 export interface SyncState {
@@ -103,10 +104,7 @@ export function SyncProvider(props: {
     } catch (error) {
       // Local failure (e.g. IndexedDB): callers fire and forget, so report it here, visibly.
       console.error("Synchronisation impossible", error);
-      const message = error instanceof Error ? error.message : String(error);
-      notify({ id: `local-error:${message}`, type: "sync", farmId,
-               text: `La synchronisation a échoué sur cet appareil (${message}). Nouvel essai automatique.`,
-               action: { label: "Ouvrir la synchronisation", tab: "sync" } });
+      notify(localSyncErrorNotification(farmId, error));
     } finally {
       setSyncing(false);
       refresh();

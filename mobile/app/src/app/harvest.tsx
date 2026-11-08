@@ -19,7 +19,7 @@ const GRADES: { value: Grade; label: string }[] = [
 const UNITS = ["kg", "g", "t"].map((value) => ({ value, label: value }));
 
 export default function Harvest(): ReactNode {
-  const { record, flash, syncNow, syncing } = useSession();
+  const { record, notify, farm, syncNow, syncing } = useSession();
   const cycles = useLocalEntities<CropCycle>("production_plans.crop_cycle")
     .filter((c) => c.status !== "cancelled" && c.status !== "closed");
   const parcels = useLocalEntities<{ id: string; code: string; name: string }>("fields.parcel");
@@ -45,7 +45,8 @@ export default function Harvest(): ReactNode {
                  unit: unit.trim(), quality_grade: grade,
                  ...(losses ? { loss_quantity_kg: normalizeDecimal(losses) } : {}) },
     });
-    flash(`Récolte de ${formatNumber(normalizeDecimal(quantity))} ${unit.trim()} enregistrée sur le téléphone.`);
+    notify({ type: "success", farmId: farm?.id ?? null,
+             text: `Récolte de ${formatNumber(normalizeDecimal(quantity))} ${unit.trim()} enregistrée sur le téléphone.` });
     router.back();
   });
 

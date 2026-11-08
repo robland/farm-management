@@ -2,15 +2,27 @@
  * Session, local database and sync loop for the mobile app (OFFLINE_SYNC.md §4.1).
  *
  * - Secure store: refresh token, device id and current user id only (small values).
- * - The user's SQLite database: outbox, entities and a cached profile, so that the
- *   app opens offline (FR-110).
+ * - The user's SQLite database: outbox, entities, a cached profile (so that the app
+ *   opens offline, FR-110) and the notification history.
  * - Sync runs at start, when connectivity returns (NetInfo), every minute and two
  *   seconds after each local change. Background execution is never relied on.
  */
 
 import NetInfo from "@react-native-community/netinfo";
+import {
+  addNotification,
+  type AppNotification,
+  localSyncErrorNotification,
+  markAllRead as markAllReadList,
+  markRead as markReadList,
+  type NotificationInput,
+  sanitizeNotifications,
+  syncNotifications,
+  unreadCount,
+} from "@fms/shared";
 import { AuthError, type EnqueueInput, NetworkError, type OpStatus, SyncEngine } from "@fms/sync-core";
 import Constants from "expo-constants";
+import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import * as SQLite from "expo-sqlite";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef,
@@ -25,11 +37,13 @@ export interface MeFarm {
   name: string;
   organization_id: string;
   role: string | null;
+  is_org_admin?: boolean;
   permissions: string[];
 }
 
-interface Me {
-  user: { id: string; full_name: string };
+export interface Me {
+  user: { id: string; full_name: string; email?: string | null; phone?: string | null };
+  organizations: { id: string; name: string; is_org_admin: boolean }[];
   farms: MeFarm[];
 }
 
@@ -43,13 +57,18 @@ interface SessionValue {
   stats: Record<OpStatus, number>;
   lastSyncAt: Date | null;
   revision: number;
-  /** Confirmation of the last local save, shown on the home screen after router.back(). */
-  notice: string | null;
-  flash: (message: string | null) => void;
   store: SqliteStore | null;
   engine: SyncEngine | null;
+  notifications: AppNotification[];
+  unread: number;
+  notify: (input: NotificationInput) => void;
+  markAllRead: () => void;
+  markRead: (id: string) => void;
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Unsent operations of every farm, to warn before logging out. */
+  countUnsent: () => Promise<number>;
+  reloadProfile: () => Promise<void>;
   pickFarm: (farm: MeFarm | null) => void;
   syncNow: () => Promise<void>;
   record: (input: Omit<EnqueueInput, "farmId">) => Promise<string>;
@@ -59,6 +78,7 @@ interface SessionValue {
 
 const SessionContext = createContext<SessionValue | null>(null);
 const USER_KEY = "fms.userId";
+const NOTIFICATIONS_KEY = "notifications";
 const EMPTY: Record<OpStatus, number> = { pending: 0, syncing: 0, synced: 0, failed: 0, conflict: 0 };
 const baseUrl = String(Constants.expoConfig?.extra?.apiBaseUrl ?? "http://10.0.2.2:8000/api/v1");
 
@@ -67,6 +87,11 @@ async function openUserStore(userId: string): Promise<SqliteStore> {
   const db = await SQLite.openDatabaseAsync(`fms-${userId}.db`);
   await migrate(db);
   return new SqliteStore(db);
+}
+
+async function taskIds(engine: SyncEngine, farmId: string): Promise<Set<string>> {
+  const views = await engine.view(farmId, "tasks.task");
+  return new Set(views.filter((v) => !v.deleted).map((v) => v.entityId));
 }
 
 export function SessionProvider({ children }: { children: ReactNode }): ReactNode {
@@ -81,15 +106,37 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
   const [store, setStore] = useState<SqliteStore | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const notificationsLoaded = useRef(false);
+  const hadSynced = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const flash = useCallback((message: string | null) => {
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    setNotice(message);
-    if (message) noticeTimer.current = setTimeout(() => setNotice(null), 6_000);
+  // Notification history: loaded with the user's database, saved on every change.
+  useEffect(() => {
+    notificationsLoaded.current = false;
+    setNotifications([]);
+    if (!store) return;
+    let active = true;
+    void store.getValue<unknown>(NOTIFICATIONS_KEY).then((saved) => {
+      if (!active) return;
+      // Keep what was notified while loading.
+      setNotifications((current) => [...current, ...sanitizeNotifications(saved)]);
+      notificationsLoaded.current = true;
+    });
+    return () => {
+      active = false;
+    };
+  }, [store]);
+
+  useEffect(() => {
+    if (store && notificationsLoaded.current) void store.setValue(NOTIFICATIONS_KEY, notifications);
+  }, [store, notifications]);
+
+  const notify = useCallback((input: NotificationInput) => {
+    setNotifications((list) => addNotification(list, input, new Date(), () => Crypto.randomUUID()));
   }, []);
+  const markAllRead = useCallback(() => setNotifications(markAllReadList), []);
+  const markRead = useCallback((id: string) => setNotifications((list) => markReadList(list, id)), []);
 
   const loadMe = useCallback(async (userStore: SqliteStore) => {
     try {
@@ -136,19 +183,39 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
     setStore(null);
   }, [api]);
 
+  const countUnsent = useCallback(async () => (store ? store.countUnsent() : 0), [store]);
+
+  const reloadProfile = useCallback(async () => {
+    if (store) await loadMe(store);
+  }, [store, loadMe]);
+
   const syncNow = useCallback(async () => {
-    if (!engine || !farm) return;
+    if (!engine || !farm || !store) return;
     setSyncing(true);
     try {
+      const before = await taskIds(engine, farm.id);
       const report = await engine.sync(farm.id);
       setOnline(!report.offline);
       if (!report.offline) setLastSyncAt(new Date());
       if (report.authRequired) await logout();
+      // A first download onto an empty phone is not "news": only later additions are.
+      const firstLoad = !hadSynced.current && before.size === 0;
+      if (!report.offline) hadSynced.current = true;
+      const after = report.pulled > 0 ? await taskIds(engine, farm.id) : before;
+      const newTaskCount = firstLoad ? 0 : [...after].filter((id) => !before.has(id)).length;
+      for (const n of syncNotifications({ farmId: farm.id, report,
+                                          operations: await store.listOperations(farm.id), newTaskCount })) {
+        notify(n);
+      }
+    } catch (error) {
+      // Local failure (e.g. SQLite): callers fire and forget, so report it here, visibly.
+      console.error("Synchronisation impossible", error);
+      notify(localSyncErrorNotification(farm.id, error));
     } finally {
       setSyncing(false);
       refresh();
     }
-  }, [engine, farm, logout, refresh]);
+  }, [engine, farm, store, logout, refresh, notify]);
 
   const record = useCallback(async (input: Omit<EnqueueInput, "farmId">) => {
     if (!engine || !farm) throw new Error("Aucune exploitation sélectionnée.");
@@ -186,6 +253,7 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
   const pickFarm = useCallback((picked: MeFarm | null) => {
     setFarm(picked);
     setLastSyncAt(null);
+    hadSynced.current = false;
     if (store) void store.setValue("farm", picked?.id ?? null);
   }, [store]);
 
@@ -196,11 +264,13 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
   }, [me, farm, pickFarm]);
 
   const value = useMemo<SessionValue>(() => ({
-    api, me, farm, ready, online, syncing, stats, lastSyncAt, revision, notice, flash, store, engine,
-    login, logout, pickFarm, syncNow, record, refresh,
+    api, me, farm, ready, online, syncing, stats, lastSyncAt, revision, store, engine,
+    notifications, unread: unreadCount(notifications), notify, markAllRead, markRead,
+    login, logout, countUnsent, reloadProfile, pickFarm, syncNow, record, refresh,
     can: (permission) => Boolean(farm?.permissions.includes(permission)),
-  }), [api, me, farm, ready, online, syncing, stats, lastSyncAt, revision, notice, flash, store, engine,
-       login, logout, pickFarm, syncNow, record, refresh]);
+  }), [api, me, farm, ready, online, syncing, stats, lastSyncAt, revision, store, engine, notifications,
+       notify, markAllRead, markRead, login, logout, countUnsent, reloadProfile, pickFarm, syncNow, record,
+       refresh]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

@@ -1,9 +1,9 @@
+import type { NotificationTarget as NotificationTab } from "@fms/shared";
 import type { ReactNode } from "react";
 
 import type { Me } from "../api/types";
 import { NotificationsMenu } from "../features/notifications/NotificationsMenu";
 import { ProfileMenu } from "../features/profile/ProfileMenu";
-import type { NotificationTab } from "../notifications/model";
 
 /**
  * Header shown on every screen once signed in: notifications and profile menu are

@@ -1,14 +1,9 @@
+import { initials } from "@fms/shared";
 import type { ReactNode } from "react";
 
 import type { Me } from "../../api/types";
 import { usePopover } from "../../ui/components";
 import { PowerIcon } from "../../ui/icons";
-
-export function initials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  const letters = parts.length > 1 ? [parts[0], parts[parts.length - 1]] : parts;
-  return letters.map((p) => p?.[0] ?? "").join("").toUpperCase() || "?";
-}
 
 /** Round avatar button; its menu holds the account details and the logout. */
 export function ProfileMenu(props: { user: Me["user"]; context?: string; onLogout: () => void }): ReactNode {

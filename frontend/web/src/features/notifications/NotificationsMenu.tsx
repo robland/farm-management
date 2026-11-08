@@ -1,8 +1,8 @@
-import { formatAge } from "@fms/shared";
+import { filterNotifications, formatAge, NOTIFICATION_FILTERS as FILTERS,
+         NOTIFICATION_TYPE_LABELS as TYPE_LABELS, type NotificationTarget as NotificationTab,
+         type NotificationType } from "@fms/shared";
 import { type ReactNode, useState } from "react";
 
-import { FILTERS, filterNotifications, type NotificationTab, type NotificationType,
-         TYPE_LABELS } from "../../notifications/model";
 import { useNotifications } from "../../notifications/NotificationsContext";
 import { AlertIcon, BellIcon, CheckIcon, InfoIcon, SyncAlertIcon } from "../../ui/icons";
 import { IconButton, usePopover } from "../../ui/components";

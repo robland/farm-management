@@ -6,7 +6,7 @@ import { type ReactNode, useState } from "react";
 import { Alert, Text, View } from "react-native";
 
 import { useLocalEntities, useSession } from "../session/Session";
-import { Button, colors, Empty, Field, LocalStatus, Notice, Screen, SectionTitle, styles,
+import { Button, colors, Empty, Field, LocalStatus, Screen, SectionTitle, styles,
          useBusy } from "../ui/components";
 
 interface Task {
@@ -20,7 +20,7 @@ interface Task {
 type Row = Task & { _id: string; _local: OpStatus | null };
 
 export default function Tasks(): ReactNode {
-  const { record, can, syncNow, syncing, flash, notice } = useSession();
+  const { record, can, syncNow, syncing, notify, farm } = useSession();
   const tasks = useLocalEntities<Task>("tasks.task");
   const reports = useLocalEntities<{ task: string }>("tasks.task_report");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -41,7 +41,8 @@ export default function Tasks(): ReactNode {
       payload: { task: task.id, actual_start: new Date().toISOString(), completion: "complete",
                  notes: (notes[task.id] ?? "").trim() },
     });
-    flash(`« ${task.title} » terminée. Le compte rendu sera envoyé dès que possible.`);
+    notify({ type: "success", farmId: farm?.id ?? null,
+             text: `« ${task.title} » terminée. Le compte rendu sera envoyé dès que possible.` });
   });
 
   // A report cannot be withdrawn once sent: confirm first (CLAUDE.md §7).
@@ -87,7 +88,6 @@ export default function Tasks(): ReactNode {
   const open = groups.late.length + groups.today.length + groups.upcoming.length;
   return (
     <Screen onRefresh={() => void syncNow()} refreshing={syncing}>
-      <Notice message={notice} onClose={() => flash(null)} />
       {open === 0 ? (
         <Empty hint="Tirez vers le bas pour synchroniser. Les tâches viennent des plans de production.">
           Aucune tâche à réaliser.

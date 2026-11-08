@@ -16,7 +16,7 @@ const KINDS = (Object.keys(OBSERVATION_KIND_LABELS) as Kind[])
 const SEVERITIES = ["1", "2", "3", "4", "5"].map((value) => ({ value, label: value }));
 
 export default function Observation(): ReactNode {
-  const { record, flash, syncNow, syncing } = useSession();
+  const { record, notify, farm, syncNow, syncing } = useSession();
   const parcels = useLocalEntities<Parcel>("fields.parcel");
   const [parcel, setParcel] = useState<string | null>(null);
   const [kind, setKind] = useState<Kind | null>(null);
@@ -38,7 +38,8 @@ export default function Observation(): ReactNode {
       payload: { parcel: selected, kind, target: target.trim(), notes: notes.trim(),
                  observed_at: new Date().toISOString(), ...(severity ? { severity: Number(severity) } : {}) },
     });
-    flash("Observation enregistrée sur le téléphone. Elle sera envoyée dès que possible.");
+    notify({ type: "success", farmId: farm?.id ?? null,
+             text: "Observation enregistrée sur le téléphone. Elle sera envoyée dès que possible." });
     router.back();
   });
 

@@ -103,6 +103,19 @@ describe("SqliteStore", () => {
     expect(await store.getCursor("f")).toBe(0);
   });
 
+  it("counts unsent operations of every farm (logout warning)", async () => {
+    const db = nodeDatabase();
+    await migrate(db);
+    const store = new SqliteStore(db);
+    const engine = new SyncEngine(store, new Server(), { deviceId: "d", authorId: "u" });
+    expect(await store.countUnsent()).toBe(0);
+    await engine.enqueue({ farmId: "f1", opType: "create", entityType: "agronomy.observation",
+                           entityId: "o1", payload: { kind: "pest" } });
+    await engine.enqueue({ farmId: "f2", opType: "create", entityType: "finance.transaction",
+                           entityId: "t1", payload: { amount: "5000" } });
+    expect(await store.countUnsent()).toBe(2);
+  });
+
   it("upserts, purges and isolates farms", async () => {
     const db = nodeDatabase();
     await migrate(db);

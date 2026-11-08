@@ -12,7 +12,7 @@ interface Account { id: string; name: string; currency: string; is_active: boole
 interface Category { id: string; name: string }
 
 export default function Expense(): ReactNode {
-  const { record, api, farm, store, flash, syncNow, syncing } = useSession();
+  const { record, api, farm, store, notify, syncNow, syncing } = useSession();
   const accounts = useLocalEntities<Account>("finance.account").filter((a) => a.is_active);
   const [categories, setCategories] = useState<Category[]>([]);
   const [account, setAccount] = useState<string | null>(null);
@@ -53,8 +53,9 @@ export default function Expense(): ReactNode {
       payload: { kind: "expense", account: selected, category, amount: normalizeDecimal(amount), currency,
                  business_date: todayIso(), description: description.trim() },
     });
-    flash(`Dépense de ${formatMoney(normalizeDecimal(amount), currency)} enregistrée sur le téléphone. `
-      + "Le solde sera mis à jour après validation sur le serveur.");
+    notify({ type: "success", farmId: farm?.id ?? null,
+             text: `Dépense de ${formatMoney(normalizeDecimal(amount), currency)} enregistrée sur le téléphone. `
+               + "Le solde sera mis à jour après validation sur le serveur." });
     router.back();
   });
 

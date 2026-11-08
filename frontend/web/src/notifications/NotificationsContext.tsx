@@ -4,17 +4,16 @@
  * are ignored rather than blocking the app.
  */
 
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
-
 import {
   addNotification,
   type AppNotification,
   markAllRead,
   markRead,
   type NotificationInput,
-  parseStored,
+  parseStoredNotifications,
   unreadCount,
-} from "./model";
+} from "@fms/shared";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 export interface NotificationsState {
   notifications: AppNotification[];
@@ -30,7 +29,7 @@ const storageKey = (userId: string) => `fms.notifications.${userId}`;
 
 function load(userId: string): AppNotification[] {
   try {
-    return parseStored(localStorage.getItem(storageKey(userId)));
+    return parseStoredNotifications(localStorage.getItem(storageKey(userId)));
   } catch {
     return [];
   }

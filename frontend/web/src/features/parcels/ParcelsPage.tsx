@@ -3,19 +3,19 @@ import { type FormEvent, type ReactNode, useState } from "react";
 
 import type { Parcel } from "../../api/types";
 import { useLocalEntities, useSync } from "../../sync/SyncContext";
-import { Button, Card, EmptyState, Field, Loading, LocalStatus, Notice, SectionHeader, useBusy,
-         useNotice } from "../../ui/components";
+import { useNotifications } from "../../notifications/NotificationsContext";
+import { Button, Card, EmptyState, Field, Loading, LocalStatus, SectionHeader, useBusy } from "../../ui/components";
 import { type Errors, hasErrors, normalizeDecimal, type ParcelForm, validateParcel } from "../validation";
 
 const EMPTY: ParcelForm = { name: "", code: "", area_m2: "", soil_ph: "" };
 
 export function ParcelsPage({ canEdit }: { canEdit: boolean }): ReactNode {
-  const { record } = useSync();
+  const { record, farmId } = useSync();
   const { rows, loading } = useLocalEntities<Parcel>("fields.parcel");
   const [form, setForm] = useState(EMPTY);
   const [errors, setErrors] = useState<Errors<ParcelForm>>({});
   const [busy, run] = useBusy();
-  const [notice, showNotice] = useNotice();
+  const { notify } = useNotifications();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -40,7 +40,8 @@ export function ParcelsPage({ canEdit }: { canEdit: boolean }): ReactNode {
         },
       });
       setForm(EMPTY);
-      showNotice("Parcelle enregistrée sur cet appareil. Elle sera envoyée dès que possible.");
+      notify({ type: "success", farmId,
+               text: `Parcelle ${form.code.trim()} enregistrée sur cet appareil. Elle sera envoyée dès que possible.` });
     });
   };
 
@@ -54,7 +55,6 @@ export function ParcelsPage({ canEdit }: { canEdit: boolean }): ReactNode {
       <SectionHeader title="Parcelles" count={loading ? undefined : rows.length}>
         {rows.length > 0 && <span className="text-sm text-stone-600">Total : {formatArea(total)}</span>}
       </SectionHeader>
-      <Notice message={notice} onClose={() => showNotice(null)} />
       {loading ? <Loading /> : rows.length === 0 ? (
         <EmptyState hint={canEdit ? "Ajoutez la première avec le formulaire ci-dessous." : undefined}>
           Aucune parcelle pour le moment.

@@ -4,8 +4,8 @@ import { type ReactNode, useState } from "react";
 
 import type { Task } from "../../api/types";
 import { type LocalMeta, useLocalEntities, useSync } from "../../sync/SyncContext";
-import { Button, Card, ConfirmDialog, EmptyState, Loading, LocalStatus, Notice, useBusy,
-         useNotice } from "../../ui/components";
+import { useNotifications } from "../../notifications/NotificationsContext";
+import { Button, Card, ConfirmDialog, EmptyState, Loading, LocalStatus, useBusy } from "../../ui/components";
 
 type Row = Task & LocalMeta;
 
@@ -51,7 +51,7 @@ function TaskItem(props: { task: Row; late: boolean; canReport: boolean; reportS
 }
 
 export function TasksPage({ canReport }: { canReport: boolean }): ReactNode {
-  const { record } = useSync();
+  const { record, farmId } = useSync();
   const { rows, loading } = useLocalEntities<Task>("tasks.task");
   const reports = useLocalEntities<{ task: string }>("tasks.task_report");
   const [busy, guard] = useBusy();
@@ -59,7 +59,7 @@ export function TasksPage({ canReport }: { canReport: boolean }): ReactNode {
   const [finishing, setFinishing] = useState<Row | null>(null);
   const [notes, setNotes] = useState("");
   const [showFinished, setShowFinished] = useState(false);
-  const [notice, showNotice] = useNotice();
+  const { notify } = useNotifications();
   const today = todayIso();
   const groups = groupTasks(rows, today);
   const reported = pendingReports(reports.rows);
@@ -94,7 +94,8 @@ export function TasksPage({ canReport }: { canReport: boolean }): ReactNode {
     });
     setFinishing(null);
     setNotes("");
-    showNotice(`« ${task.title} » terminée. Le compte rendu sera envoyé dès que possible.`);
+    notify({ type: "success", farmId,
+             text: `« ${task.title} » terminée. Le compte rendu sera envoyé dès que possible.` });
   });
 
   const section = (title: string, list: Row[], tone: string, late = false) => list.length > 0 && (
@@ -120,7 +121,6 @@ export function TasksPage({ canReport }: { canReport: boolean }): ReactNode {
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold">Tâches</h2>
-      <Notice message={notice} onClose={() => showNotice(null)} />
       {loading ? <Loading /> : openCount === 0 && groups.finished.length === 0 ? (
         <EmptyState hint="Les tâches sont générées à partir des plans de production.">
           Aucune tâche planifiée.

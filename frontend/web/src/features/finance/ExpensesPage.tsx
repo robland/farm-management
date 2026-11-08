@@ -5,8 +5,9 @@ import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import type { ApiClient } from "../../api/client";
 import type { FinanceCategory, Paginated, Transaction, TreasuryAccount } from "../../api/types";
 import { useLocalEntities, useSync } from "../../sync/SyncContext";
-import { Button, Card, EmptyState, ErrorMessage, Field, Loading, LocalStatus, Notice, SectionHeader, Select,
-         useBusy, useNotice } from "../../ui/components";
+import { useNotifications } from "../../notifications/NotificationsContext";
+import { Button, Card, EmptyState, ErrorMessage, Field, Loading, LocalStatus, SectionHeader, Select,
+         useBusy } from "../../ui/components";
 import { type Errors, type ExpenseForm, hasErrors, normalizeDecimal, validateExpense } from "../validation";
 
 const CATEGORY_CACHE = "fms.categories";
@@ -38,7 +39,7 @@ function useCategories(api: ApiClient, organizationId: string): FinanceCategory[
 }
 
 export function ExpensesPage(props: { api: ApiClient; organizationId: string; canCreate: boolean }): ReactNode {
-  const { record } = useSync();
+  const { record, farmId } = useSync();
   const accounts = useLocalEntities<TreasuryAccount>("finance.account");
   const transactions = useLocalEntities<Transaction & { category?: string }>("finance.transaction");
   const categories = useCategories(props.api, props.organizationId);
@@ -51,7 +52,7 @@ export function ExpensesPage(props: { api: ApiClient; organizationId: string; ca
   const [form, setForm] = useState(empty);
   const [errors, setErrors] = useState<Errors<ExpenseForm>>({});
   const [busy, run] = useBusy();
-  const [notice, showNotice] = useNotice();
+  const { notify } = useNotifications();
   const account = form.account || defaultAccount;
   const currency = activeAccounts.find((a) => a.id === account)?.currency ?? "XAF";
 
@@ -78,8 +79,9 @@ export function ExpensesPage(props: { api: ApiClient; organizationId: string; ca
           description: values.description.trim(),
         },
       });
-      showNotice(`Dépense de ${formatMoney(normalizeDecimal(values.amount), currency)} enregistrée sur cet `
-        + "appareil. Le solde sera mis à jour après validation sur le serveur.");
+      notify({ type: "success", farmId,
+               text: `Dépense de ${formatMoney(normalizeDecimal(values.amount), currency)} enregistrée sur cet `
+                 + "appareil. Le solde sera mis à jour après validation sur le serveur." });
       // Keep account and date: several receipts are often entered in a row.
       setForm({ ...empty, account, business_date: values.business_date });
     });
@@ -93,7 +95,6 @@ export function ExpensesPage(props: { api: ApiClient; organizationId: string; ca
   return (
     <section className="flex flex-col gap-4">
       <SectionHeader title="Dépenses" />
-      <Notice message={notice} onClose={() => showNotice(null)} />
       {props.canCreate && (
         <Card>
           <form onSubmit={submit} noValidate className="grid gap-3 p-4 sm:grid-cols-2">

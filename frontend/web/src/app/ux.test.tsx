@@ -62,7 +62,13 @@ describe("expenses", () => {
     fireEvent.click(submit);
     fireEvent.click(submit);
 
-    expect(await screen.findByText(/Dépense de 15.000 XAF enregistrée sur cet appareil/)).toBeTruthy();
+    // The confirmation goes to the notification centre (bell with an unread count).
+    fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 non lue" }));
+    const panel = screen.getByRole("region", { name: "Notifications" });
+    expect(within(panel).getByText(/Dépense de 15.000 XAF enregistrée sur cet appareil/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Tout marquer comme lu" }));
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(await opsOf(store, "finance.transaction")).toHaveLength(1);
     // Testing Library normalizes the narrow no-break space of the DOM, hence the regexes.
     expect(await screen.findByText(/^15.000 XAF$/)).toBeTruthy();
@@ -76,6 +82,9 @@ describe("expenses", () => {
   it("hides the entry form without the create permission", async () => {
     await openOffline(me("user-ro", ["finance.view"]));
     expect(await screen.findByText("Aucune transaction.")).toBeTruthy();
+    // Profile and notifications are reachable on every screen once signed in.
+    expect(screen.getByRole("button", { name: "Profil : Awa Diallo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Enregistrer la dépense" })).toBeNull();
   });
 });
@@ -122,14 +131,16 @@ describe("session", () => {
     // Shown on the row and in the total.
     expect(await screen.findAllByText(/2.500 m² \(0,25 ha\)/)).toHaveLength(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Déconnexion" }));
+    // Logout lives in the profile menu.
+    fireEvent.click(screen.getByRole("button", { name: "Profil : Awa Diallo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Déconnexion" }));
     const dialog = await screen.findByRole("dialog", { name: "Se déconnecter ?" });
     expect(dialog.textContent).toMatch(/restent sur cet appareil/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(screen.getByText("Ferme Nord")).toBeTruthy();
   });
 
-  it("lets a user with several farms pick one, with readable roles, or log out", async () => {
+  it("shows profile and notifications on the farm picker, with readable roles, and logs out", async () => {
     localStorage.setItem("fms.refresh", "r");
     localStorage.setItem("fms.deviceId", "dev-1");
     localStorage.setItem("fms.me", JSON.stringify(me("user-multi", [], [
@@ -139,7 +150,61 @@ describe("session", () => {
     expect(await screen.findByText("Choisir une exploitation")).toBeTruthy();
     expect(screen.getByText("Gestionnaire d'exploitation")).toBeTruthy();
     expect(screen.getByText("Ouvrier")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Déconnexion" }));
+    // Not an administrator of the organization: no creation.
+    expect(screen.queryByRole("button", { name: /Créer une exploitation/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(screen.getByText("Aucune notification pour le moment.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Profil : Awa Diallo" }));
+    expect(screen.getByRole("menu", { name: "Profil" }).textContent).toMatch(/Awa Diallo/);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Déconnexion" }));
     expect(await screen.findByRole("button", { name: "Se connecter" })).toBeTruthy();
+  });
+
+  it("lets an organization administrator create a farm, then reloads the profile", async () => {
+    const admin: Me = { ...me("user-admin", []), farms: [],
+                        organizations: [{ id: "org-1", name: "Coopérative", is_org_admin: true },
+                                        { id: "org-2", name: "Autre", is_org_admin: false }] };
+    const created: unknown[] = [];
+    let profile = admin;
+    localStorage.setItem("fms.refresh", "r");
+    localStorage.setItem("fms.deviceId", "dev-1");
+    localStorage.setItem("fms.me", JSON.stringify(admin));
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+    const api = new ApiClient("/api/v1", async (input, init) => {
+      const url = String(input).replace("/api/v1", "");
+      if (url === "/auth/refresh/") return json({ access: "a", refresh: "r" });
+      if (url === "/me/") return json(profile);
+      if (url === "/organizations/org-1/") {
+        return json({ id: "org-1", country: "CM", default_currency: "XAF", default_timezone: "Africa/Douala" });
+      }
+      if (url === "/organizations/org-1/farms/" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, string>;
+        created.push(body);
+        profile = { ...admin, farms: [{ id: "farm-new", name: body.name ?? "", organization_id: "org-1",
+                                        role: null, is_org_admin: true, permissions: [] },
+                                      { id: "farm-x", name: "Autre ferme", organization_id: "org-2",
+                                        role: "worker", is_org_admin: false, permissions: [] }] };
+        return json({ id: "farm-new" }, 201);
+      }
+      return json({}, 404);
+    });
+    render(<App api={api} />);
+    // Only in the organization the user administers.
+    const createButtons = await screen.findAllByRole("button", { name: /Créer une exploitation/ });
+    expect(createButtons).toHaveLength(1);
+    fireEvent.click(createButtons[0]!);
+    const dialog = screen.getByRole("dialog", { name: "Créer une exploitation" });
+    await waitFor(() => expect((within(dialog).getByLabelText("Pays") as HTMLInputElement).value).toBe("CM"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Créer l'exploitation" }));
+    expect(await within(dialog).findByText("Nom obligatoire.")).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Nom"), { target: { value: "Ferme Est" } });
+    fireEvent.change(within(dialog).getByLabelText("Code"), { target: { value: "ferme-est" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Créer l'exploitation" }));
+
+    expect(await screen.findByText("Ferme Est")).toBeTruthy();
+    expect(created).toEqual([{ name: "Ferme Est", code: "ferme-est", country: "CM", timezone: "Africa/Douala",
+                               currency: "XAF" }]);
+    expect(screen.getByRole("button", { name: "Notifications, 1 non lue" })).toBeTruthy();
   });
 });

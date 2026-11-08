@@ -1,3 +1,4 @@
+import { roleLabel } from "@fms/shared";
 import { AuthError, NetworkError, SyncEngine } from "@fms/sync-core";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -9,16 +10,19 @@ import { ExpensesPage } from "../features/finance/ExpensesPage";
 import { ParcelsPage } from "../features/parcels/ParcelsPage";
 import { SyncPage } from "../features/sync/SyncPage";
 import { TasksPage } from "../features/tasks/TasksPage";
+import type { NotificationTab } from "../notifications/model";
+import { NotificationsProvider } from "../notifications/NotificationsContext";
 import { DexieStore, requestPersistentStorage } from "../storage/dexieStore";
 import { SyncProvider, useSync } from "../sync/SyncContext";
 import { HttpTransport } from "../sync/transport";
-import { Button, ConfirmDialog, ErrorMessage, Loading, OfflineBanner, SyncBadge } from "../ui/components";
+import { ConfirmDialog, ErrorMessage, Loading, OfflineBanner, SyncBadge } from "../ui/components";
+import { AppHeader } from "./AppHeader";
 
 const ME_CACHE = "fms.me";
 const FARM_KEY = "fms.farm";
 const TAB_KEY = "fms.tab";
 
-type Tab = "parcels" | "tasks" | "expenses" | "sync";
+type Tab = NotificationTab;
 
 /** Remembered tab: a convenience only, so storage failures are ignored. */
 function readTab(): string | null {
@@ -29,26 +33,24 @@ function readTab(): string | null {
   }
 }
 
-function Shell(props: { farm: MeFarm; userName: string; store: DexieStore; api: ApiClient;
+function Shell(props: { farm: MeFarm; user: Me["user"]; store: DexieStore; api: ApiClient;
                         canSwitchFarm: boolean; onSwitchFarm: () => void; onLogout: () => void }): ReactNode {
   const { online, syncing, stats } = useSync();
   const can = (code: string) => props.farm.permissions.includes(code);
-  const problems = stats.failed + stats.conflict;
-  const unsent = stats.pending + stats.syncing + problems;
-  const tabs: { id: Tab; label: string; visible: boolean; badge?: number }[] = [
+  const tabs: { id: Tab; label: string; visible: boolean }[] = [
     { id: "tasks", label: "Tâches", visible: can("tasks.view") },
     { id: "parcels", label: "Parcelles", visible: can("fields.view") },
     { id: "expenses", label: "Dépenses", visible: can("finance.view") || can("finance.transaction.create") },
-    { id: "sync", label: "Synchronisation", visible: true, badge: problems },
+    { id: "sync", label: "Synchronisation", visible: true },
   ];
   const visible = tabs.filter((t) => t.visible);
   const [tab, setTabState] = useState<Tab>(() => {
     const saved = readTab();
     return visible.find((t) => t.id === saved)?.id ?? visible[0]?.id ?? "sync";
   });
-  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const setTab = (next: Tab) => {
+    if (!visible.some((t) => t.id === next)) return;
     setTabState(next);
     try {
       sessionStorage.setItem(TAB_KEY, next);
@@ -57,49 +59,38 @@ function Shell(props: { farm: MeFarm; userName: string; store: DexieStore; api: 
     }
   };
 
+  const role = props.farm.is_org_admin && !props.farm.role ? "Administrateur de l'organisation"
+    : roleLabel(props.farm.role);
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-10 border-b border-stone-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-2 px-4 py-3">
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold">{props.farm.name}</h1>
-            <p className="flex flex-wrap items-center gap-x-2 text-sm text-stone-600">
-              <span>{props.userName}</span>
-              {props.canSwitchFarm && (
-                <button type="button" className="text-green-800 underline" onClick={props.onSwitchFarm}>
-                  Changer d'exploitation
-                </button>
-              )}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <SyncBadge online={online} syncing={syncing} stats={stats} />
-            <Button variant="secondary"
-                    onClick={() => (unsent ? setConfirmLogout(true) : props.onLogout())}>
-              Déconnexion
-            </Button>
-          </div>
-        </div>
+      <AppHeader
+        user={props.user}
+        title={props.farm.name}
+        subtitle={props.canSwitchFarm && (
+          <button type="button" className="text-sm text-green-800 underline" onClick={props.onSwitchFarm}>
+            Changer d'exploitation
+          </button>
+        )}
+        status={<SyncBadge online={online} syncing={syncing} stats={stats} />}
+        profileContext={[role, props.farm.name].filter(Boolean).join(" · ")}
+        currentFarmId={props.farm.id}
+        onNotificationAction={setTab}
+        onLogout={props.onLogout}>
         <nav className="mx-auto flex max-w-4xl gap-1 overflow-x-auto px-4" aria-label="Sections">
           {visible.map((t) => (
             <button key={t.id} type="button" aria-current={t.id === tab ? "page" : undefined}
                     onClick={() => setTab(t.id)}
-                    className={`inline-flex min-h-11 shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-medium
+                    className={`inline-flex min-h-11 shrink-0 items-center border-b-2 px-3 text-sm font-medium sm:min-h-10
                                 focus-visible:outline-2 focus-visible:outline-green-700 ${t.id === tab
                                   ? "border-green-700 text-green-800"
                                   : "border-transparent text-stone-600 hover:text-stone-900"}`}>
               {t.label}
-              {t.badge ? (
-                <span className="rounded-full bg-red-700 px-1.5 text-xs text-white">
-                  {t.badge}<span className="sr-only"> à traiter</span>
-                </span>
-              ) : null}
             </button>
           ))}
         </nav>
-      </header>
+      </AppHeader>
       <main className="mx-auto flex max-w-4xl flex-col gap-4 p-4">
-        <OfflineBanner online={online} />
+        <div className="sm:hidden"><OfflineBanner online={online} /></div>
         {tab === "parcels" && <ParcelsPage canEdit={can("fields.edit")} />}
         {tab === "tasks" && <TasksPage canReport={can("tasks.report")} />}
         {tab === "expenses" && (
@@ -108,11 +99,6 @@ function Shell(props: { farm: MeFarm; userName: string; store: DexieStore; api: 
         )}
         {tab === "sync" && <SyncPage store={props.store} />}
       </main>
-      <ConfirmDialog open={confirmLogout} title="Se déconnecter ?" confirmLabel="Se déconnecter"
-                     onCancel={() => setConfirmLogout(false)} onConfirm={props.onLogout}>
-        Saisies pas encore envoyées au serveur : <strong>{unsent}</strong>. Elles restent sur cet appareil
-        et seront envoyées à votre prochaine connexion avec ce même compte.
-      </ConfirmDialog>
     </div>
   );
 }
@@ -125,6 +111,7 @@ export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
   const [farmId, setFarmId] = useState<string | null>(() => localStorage.getItem(FARM_KEY));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [unsentAtLogout, setUnsentAtLogout] = useState(0);
 
   const loadMe = useCallback(async () => {
     setLoading(true);
@@ -150,6 +137,7 @@ export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
   const logout = useCallback(() => {
     api.logout();
     localStorage.removeItem(ME_CACHE);
+    setUnsentAtLogout(0);
     setMe(null);
   }, [api]);
 
@@ -168,21 +156,36 @@ export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
     return new SyncEngine(store, new HttpTransport(api), { deviceId, authorId: me.user.id });
   }, [store, me?.user.id, api]);
 
+  /** Sensitive: unsent entries stay on the device; say so before leaving (CLAUDE.md §7). */
+  const requestLogout = useCallback(() => {
+    void (store ? store.countUnsent() : Promise.resolve(0)).then((unsent) => {
+      if (unsent) setUnsentAtLogout(unsent);
+      else logout();
+    });
+  }, [store, logout]);
+
   if (!me) {
     return loading ? <Loading /> : <LoginPage api={api} onLoggedIn={() => void loadMe()} />;
   }
-  if (!farm || !engine || !store) {
-    return (
-      <>
-        {error && <div className="mx-auto max-w-md p-4"><ErrorMessage>{error}</ErrorMessage></div>}
-        <FarmPicker me={me} onPick={pick} onLogout={logout} />
-      </>
-    );
-  }
   return (
-    <SyncProvider key={farm.id} engine={engine} farmId={farm.id} onAuthRequired={logout}>
-      <Shell farm={farm} userName={me.user.full_name} store={store} api={api} onLogout={logout}
-             canSwitchFarm={me.farms.length > 1} onSwitchFarm={() => setFarmId(null)} />
-    </SyncProvider>
+    <NotificationsProvider key={me.user.id} userId={me.user.id}>
+      {!farm || !engine || !store ? (
+        <>
+          {error && <div className="mx-auto max-w-2xl p-4"><ErrorMessage>{error}</ErrorMessage></div>}
+          <FarmPicker me={me} api={api} onPick={pick} onLogout={requestLogout}
+                      onFarmCreated={() => void loadMe()} />
+        </>
+      ) : (
+        <SyncProvider key={farm.id} engine={engine} store={store} farmId={farm.id} onAuthRequired={logout}>
+          <Shell farm={farm} user={me.user} store={store} api={api} onLogout={requestLogout}
+                 canSwitchFarm={me.farms.length > 1} onSwitchFarm={() => setFarmId(null)} />
+        </SyncProvider>
+      )}
+      <ConfirmDialog open={unsentAtLogout > 0} title="Se déconnecter ?" confirmLabel="Se déconnecter"
+                     onCancel={() => setUnsentAtLogout(0)} onConfirm={logout}>
+        Saisies pas encore envoyées au serveur : <strong>{unsentAtLogout}</strong>. Elles restent sur cet appareil
+        et seront envoyées à votre prochaine connexion avec ce même compte.
+      </ConfirmDialog>
+    </NotificationsProvider>
   );
 }

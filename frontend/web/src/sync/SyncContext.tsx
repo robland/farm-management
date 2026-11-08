@@ -4,7 +4,7 @@
  * after each local change.
  */
 
-import type { EnqueueInput, OpStatus, SyncEngine, SyncReport } from "@fms/sync-core";
+import type { EnqueueInput, OpStatus, SyncEngine, SyncReport, SyncStore } from "@fms/sync-core";
 import {
   createContext,
   type ReactNode,
@@ -15,6 +15,9 @@ import {
   useRef,
   useState,
 } from "react";
+
+import { syncNotifications } from "../notifications/fromSync";
+import { useNotifications } from "../notifications/NotificationsContext";
 
 export interface SyncState {
   engine: SyncEngine;
@@ -49,13 +52,21 @@ async function withBrowserLock(fn: () => Promise<void>): Promise<void> {
   await fn();
 }
 
+async function taskIds(engine: SyncEngine, farmId: string): Promise<Set<string>> {
+  const views = await engine.view(farmId, "tasks.task");
+  return new Set(views.filter((v) => !v.deleted).map((v) => v.entityId));
+}
+
 export function SyncProvider(props: {
   engine: SyncEngine;
+  store: SyncStore;
   farmId: string;
   onAuthRequired: () => void;
   children: ReactNode;
 }): ReactNode {
-  const { engine, farmId, onAuthRequired } = props;
+  const { engine, store, farmId, onAuthRequired } = props;
+  const { notify } = useNotifications();
+  const hadSynced = useRef(false);
   const [stats, setStats] = useState(EMPTY_STATS);
   const [online, setOnline] = useState(typeof navigator === "undefined" || navigator.onLine);
   const [syncing, setSyncing] = useState(false);
@@ -73,17 +84,34 @@ export function SyncProvider(props: {
     setSyncing(true);
     try {
       await withBrowserLock(async () => {
+        const before = await taskIds(engine, farmId);
         const report = await engine.sync(farmId);
         setLastReport(report);
         setOnline(!report.offline);
         if (!report.offline) setLastSyncAt(new Date());
         if (report.authRequired) onAuthRequired();
+        // A first download onto an empty device is not "news": only later additions are.
+        const firstLoad = !hadSynced.current && before.size === 0;
+        if (!report.offline) hadSynced.current = true;
+        const after = report.pulled > 0 ? await taskIds(engine, farmId) : before;
+        const newTaskCount = firstLoad ? 0 : [...after].filter((id) => !before.has(id)).length;
+        for (const n of syncNotifications({ farmId, report, operations: await store.listOperations(farmId),
+                                            newTaskCount })) {
+          notify(n);
+        }
       });
+    } catch (error) {
+      // Local failure (e.g. IndexedDB): callers fire and forget, so report it here, visibly.
+      console.error("Synchronisation impossible", error);
+      const message = error instanceof Error ? error.message : String(error);
+      notify({ id: `local-error:${message}`, type: "sync", farmId,
+               text: `La synchronisation a échoué sur cet appareil (${message}). Nouvel essai automatique.`,
+               action: { label: "Ouvrir la synchronisation", tab: "sync" } });
     } finally {
       setSyncing(false);
       refresh();
     }
-  }, [engine, farmId, onAuthRequired, refresh]);
+  }, [engine, store, farmId, onAuthRequired, refresh, notify]);
 
   const record = useCallback(
     async (input: Omit<EnqueueInput, "farmId">) => {

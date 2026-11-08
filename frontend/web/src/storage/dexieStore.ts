@@ -53,6 +53,11 @@ export class DexieStore implements SyncStore {
     await this.db.operations.delete(opId);
   }
 
+  /** Operations not yet confirmed by the server, all farms (warning before logout). */
+  countUnsent(): Promise<number> {
+    return this.db.operations.filter((op) => op.status !== "synced").count();
+  }
+
   listOperations(farmId: string): Promise<LocalOperation[]> {
     return this.db.operations.where("farmId").equals(farmId).toArray();
   }

@@ -2,8 +2,11 @@
 
 import type { OpStatus } from "@fms/sync-core";
 import { LOCAL_STATE_LABELS } from "@fms/shared";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, Ref, RefObject,
+              SelectHTMLAttributes } from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+
+import { EyeIcon, EyeOffIcon } from "./icons";
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-700";
 
@@ -17,18 +20,43 @@ export function Button(
     danger: "bg-red-700 text-white hover:bg-red-800",
     ghost: "text-green-800 hover:bg-green-50",
   }[variant];
-  // min-h-11: 44 px touch target on phones and tablets (NFR-006).
+  // 44 px touch target on phones (NFR-006), 36 px with a mouse from the sm breakpoint.
   return (
     <button
       type="button"
-      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm
-                  font-medium disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS} ${styles} ${className}`}
+      className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-4 text-sm font-medium
+                  whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9 sm:px-3.5
+                  ${FOCUS} ${styles} ${className}`}
       {...rest}
     />
   );
 }
 
-const INPUT = `min-h-11 w-full rounded-md border bg-white px-3 py-2 ${FOCUS}`;
+/** Round icon-only button: the label is mandatory (screen readers). */
+export function IconButton(
+  props: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; badge?: number;
+                                                     ref?: Ref<HTMLButtonElement> },
+): ReactNode {
+  const { label, badge, className = "", children, ref, ...rest } = props;
+  return (
+    <button ref={ref} type="button" aria-label={badge ? `${label}, ${badge} non lue${badge > 1 ? "s" : ""}` : label}
+            className={`relative inline-flex size-11 items-center justify-center rounded-full border border-stone-200
+                        bg-white text-stone-700 hover:bg-stone-100 hover:text-stone-900 sm:size-9 ${FOCUS}
+                        ${className}`}
+            {...rest}>
+      {children}
+      {badge ? (
+        <span aria-hidden="true"
+              className="absolute -top-1 -right-1 min-w-[18px] rounded-full border-2 border-white bg-red-700 px-1
+                         text-center text-[11px] leading-[14px] font-bold text-white">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+const INPUT = `min-h-11 w-full rounded-md border bg-white px-3 py-2 sm:min-h-10 ${FOCUS}`;
 
 export function Field(
   props: InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string | undefined;
@@ -53,7 +81,7 @@ export function Field(
   );
 }
 
-/** Password input with a show/hide toggle (typing on a phone in the field). */
+/** Password input with an eye toggle inside the field (typing on a phone in the field). */
 export function PasswordField(
   props: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { label: string },
 ): ReactNode {
@@ -63,12 +91,15 @@ export function PasswordField(
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-sm font-medium">{label}</label>
-      <div className="flex gap-2">
-        <input id={id} type={visible ? "text" : "password"} className={`${INPUT} border-stone-300`} {...rest} />
-        <Button variant="secondary" aria-pressed={visible} aria-controls={id}
-                onClick={() => setVisible(!visible)}>
-          {visible ? "Masquer" : "Afficher"}
-        </Button>
+      <div className="relative">
+        <input id={id} type={visible ? "text" : "password"} className={`${INPUT} border-stone-300 pr-12`} {...rest} />
+        <button type="button" aria-pressed={visible} aria-controls={id}
+                aria-label={visible ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                onClick={() => setVisible(!visible)}
+                className={`absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-md
+                            text-stone-600 hover:text-stone-900 ${FOCUS}`}>
+          {visible ? <EyeOffIcon /> : <EyeIcon />}
+        </button>
       </div>
     </div>
   );
@@ -139,35 +170,38 @@ export function ErrorMessage({ children }: { children: ReactNode }): ReactNode {
   return <p role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-800">{children}</p>;
 }
 
-/** Transient confirmation ("saved on this device"), announced to screen readers. */
-export function Notice({ message, onClose }: { message: string | null; onClose: () => void }): ReactNode {
-  return (
-    <div aria-live="polite" className="empty:hidden">
-      {message && (
-        <p className="flex items-start justify-between gap-2 rounded-md border border-green-200 bg-green-50 p-3
-                      text-sm text-green-900">
-          <span>{message}</span>
-          <button type="button" className={`rounded px-1 text-green-900 ${FOCUS}`} aria-label="Fermer"
-                  onClick={onClose}>×</button>
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Message shown for a few seconds after a successful local save. */
-export function useNotice(durationMs = 5000): [string | null, (message: string | null) => void] {
-  const [message, setMessage] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
-  const show = useCallback((next: string | null) => {
-    if (timer.current) clearTimeout(timer.current);
-    setMessage(next);
-    if (next) timer.current = setTimeout(() => setMessage(null), durationMs);
-  }, [durationMs]);
-  return [message, show];
+/**
+ * Open/close state of a menu or panel attached to a button: closes on Escape (focus
+ * back on the button) and on a click outside.
+ */
+export function usePopover(): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  rootRef: RefObject<HTMLDivElement | null>;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+} {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+    const onPointer = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onPointer);
+    };
+  }, [open]);
+  return { open, setOpen, rootRef, buttonRef };
 }
 
 /**
@@ -199,22 +233,22 @@ export function LocalStatus({ status }: { status: OpStatus | null }): ReactNode 
   return <span className={`inline-block rounded px-2 py-0.5 text-xs ${color}`}>{LOCAL_STATE_LABELS[status]}</span>;
 }
 
-/** Global synchronization badge. */
+/** Compact connection and queue status; problems are listed in the notifications. */
 export function SyncBadge(props: {
   online: boolean;
   syncing: boolean;
   stats: Record<OpStatus, number>;
 }): ReactNode {
   const waiting = props.stats.pending + props.stats.syncing;
-  const problems = props.stats.failed + props.stats.conflict;
   let text = props.online ? "En ligne" : "Hors ligne";
   if (props.syncing) text = "Synchronisation…";
   else if (waiting) text += ` · ${waiting} en attente`;
-  if (problems) text += ` · ${problems} à traiter`;
-  const color = problems ? "bg-red-700" : props.online ? "bg-green-700" : "bg-stone-600";
+  const [chip, dot] = props.online ? ["bg-green-100 text-green-800", "bg-green-700"]
+    : ["bg-stone-200 text-stone-700", "bg-stone-500"];
   return (
-    <span role="status" className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs text-white ${color}`}>
-      <span aria-hidden="true" className={`size-2 rounded-full bg-white ${props.syncing ? "animate-pulse" : ""}`} />
+    <span role="status"
+          className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium whitespace-nowrap ${chip}`}>
+      <span aria-hidden="true" className={`size-2 rounded-full ${dot} ${props.syncing ? "animate-pulse" : ""}`} />
       {text}
     </span>
   );

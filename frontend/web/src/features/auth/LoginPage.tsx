@@ -37,7 +37,7 @@ export function LoginPage(props: { api: ApiClient; onLoggedIn: (s: Session) => v
       <form onSubmit={submit} className="flex flex-col gap-4 rounded-lg border border-stone-200 bg-white p-4 shadow-sm"
             noValidate>
         <Field label="E-mail ou téléphone" value={identifier} autoComplete="username" autoCapitalize="none"
-               hint="Téléphone au format international, avec l'indicatif du pays (+…)."
+               hint="Téléphone avec l'indicatif du pays"
                onChange={(e) => setIdentifier(e.target.value)} />
         <PasswordField label="Mot de passe" value={password} autoComplete="current-password"
                        onChange={(e) => setPassword(e.target.value)} />

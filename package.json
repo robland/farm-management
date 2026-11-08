@@ -1,0 +1,20 @@
+{
+  "name": "farm-management",
+  "private": true,
+  "workspaces": [
+    "packages/sync-core",
+    "packages/shared",
+    "frontend/web"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

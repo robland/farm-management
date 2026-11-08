@@ -1,0 +1,82 @@
+[project]
+name = "fms-backend"
+version = "0.1.0"
+description = "Farm Management System - backend API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "django>=5.2,<5.3",
+    "djangorestframework>=3.16,<3.17",
+    "drf-spectacular>=0.28",
+    "djangorestframework-simplejwt>=5.5",
+    "django-filter>=25.1",
+    "psycopg[binary]>=3.2",
+    "django-environ>=0.12",
+    "argon2-cffi>=23.1",
+    "pypdf>=7,<8",
+    "gunicorn>=23,<24",
+]
+
+[project.optional-dependencies]
+# Optional AI provider adapter (apps/ai_assistant/providers.py). The core works without it.
+ai = [
+    "anthropic>=2.6,<3",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14",
+    "mypy>=1.18",
+    "django-stubs[compatible-mypy]>=5.2",
+    "djangorestframework-stubs[compatible-mypy]>=3.16",
+    "pytest>=8.4",
+    "pytest-django>=4.11",
+    "factory-boy>=3.3",
+    "hypothesis>=6.140",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["**/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "DJ", "S", "SIM", "RUF", "DTZ"]
+# RUF001-003: French typography (×, ’, …) is intentional in user-facing text.
+ignore = ["RUF012", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "config", "tests", "agronomy_engine"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+"tests/**" = ["S101", "S105", "S106"]
+"**/config/settings/*" = ["F405", "F403"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "$MYPY_CONFIG_FILE_DIR"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["migrations/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["*.tests.*", "tests.*", "*.migrations.*"]
+disallow_untyped_defs = false
+ignore_errors = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+testpaths = ["apps", "agronomy_engine", "tests"]
+addopts = "-ra --strict-markers"

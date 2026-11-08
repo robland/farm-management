@@ -1,0 +1,45 @@
+# Development services:            docker compose up -d db
+# API container (production image):  docker compose --profile app up -d --build
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fms}
+      POSTGRES_DB: ${POSTGRES_DB:-fms}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fms}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    # Reserved for background jobs (Celery, OPEN_QUESTIONS Q24); not used yet.
+    image: redis:7-alpine
+    profiles: ["jobs"]
+    ports:
+      - "${REDIS_PORT:-56379}:6379"
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fms}:${POSTGRES_PASSWORD:-fms}@db:5432/${POSTGRES_DB:-fms}
+      DJANGO_SECURE_SSL_REDIRECT: "false"  # TLS terminated by the reverse proxy
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - files:/data/files
+
+volumes:
+  pgdata:
+  files:

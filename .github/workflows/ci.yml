@@ -1,0 +1,47 @@
+# Continuous integration (OPEN_QUESTIONS Q13: active once a GitHub remote exists).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fms
+          POSTGRES_PASSWORD: fms
+          POSTGRES_DB: fms
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fms" --health-interval 5s --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --extra ai
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy apps config agronomy_engine
+      - run: uv run python manage.py makemigrations --check --dry-run --settings=config.settings.test
+      - run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build --workspace web

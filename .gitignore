@@ -1,0 +1,29 @@
+.idea/
+.venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+backend/staticfiles/
+backend/media/
+
+# JavaScript
+node_modules/
+dist/
+.expo/
+mobile/app/ios/
+mobile/app/android/
+coverage/
+*.tsbuildinfo
+# Generated OpenAPI export (served live at /api/v1/schema/)
+backend/openapi.yaml

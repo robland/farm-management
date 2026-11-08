@@ -1,0 +1,6 @@
+# Files executed or parsed inside Linux containers: always LF, even in a Windows checkout.
+*.sh text eol=lf
+Dockerfile text eol=lf
+**/Dockerfile text eol=lf
+deploy/Caddyfile text eol=lf
+deploy/*.yml text eol=lf

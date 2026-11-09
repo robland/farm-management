@@ -154,6 +154,10 @@ SPECTACULAR_SETTINGS = {
         "ActiveArchivedStatusEnum": "apps.farms.models.Farm.Status",
         "MembershipStatusEnum": "apps.farms.models.FarmMembership.Status",
         "VersionedDocumentStatusEnum": "apps.irrigation.models.IrrigationDesign.Status",
+        "TransactionKindEnum": "apps.finance.models.FinancialTransaction.Kind",
+        "FinanceCategoryKindEnum": "apps.finance.models.FinanceCategory.Kind",
+        "TransactionInputKindEnum": ["expense", "income", "transfer", "funding", "repayment"],
+        "TreasuryAccountKindEnum": "apps.finance.models.TreasuryAccount.Kind",
     },
 }
 

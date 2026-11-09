@@ -171,12 +171,14 @@ def void_harvest(ctx: TenantContext, *, record_id: uuid.UUID, reason: str) -> Ha
 
 
 def _money_for_cycle(cycle: CropCycle, kind: str, currency: str) -> Decimal:
+    """Validated income or campaign expenses of a cycle. Fundings, repayments and transfers
+    are other kinds; investment expenses (machines, irrigation) are excluded (Q35)."""
     validated = FinancialTransaction.objects.filter(
         farm_id=cycle.farm_id,
         kind=kind,
         status=FinancialTransaction.Status.VALIDATED,
         currency=currency,
-    )
+    ).exclude(category__is_capex=True)
     direct = validated.filter(crop_cycle=cycle).aggregate(s=Sum("amount"))["s"] or Decimal(0)
     plan_level = validated.filter(plan_id=cycle.plan_id, crop_cycle__isnull=True).aggregate(
         s=Sum("amount")

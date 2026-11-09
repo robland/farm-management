@@ -10,9 +10,16 @@ from rest_framework.response import Response
 
 from apps.core.exceptions import PreconditionRequiredError
 from apps.core.versioning import parse_if_match
+from apps.core.viewsets import CHECKED_IN_SERVICE
 from apps.farms.viewsets import FarmScopedGenericViewSet
 from apps.finance import services
-from apps.finance.models import BudgetLine, FinanceCategory, FinancialTransaction, TreasuryAccount
+from apps.finance.models import (
+    BudgetLine,
+    FinanceCategory,
+    FinancialTransaction,
+    Loan,
+    TreasuryAccount,
+)
 from apps.finance.serializers import (
     AllocationSerializer,
     AmendSerializer,
@@ -22,6 +29,8 @@ from apps.finance.serializers import (
     BudgetReportQuerySerializer,
     CorrectionSerializer,
     FinanceCategorySerializer,
+    LoanSerializer,
+    MemberAccountOpenSerializer,
     OpeningSerializer,
     ReasonSerializer,
     TransactionInputSerializer,
@@ -47,18 +56,47 @@ class TreasuryAccountViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, FarmScopedGenericViewSet
 ):
     serializer_class = TreasuryAccountSerializer
+    queryset = TreasuryAccount.objects.none()  # model hint for OpenAPI; see get_queryset
     http_method_names = ["get", "post", "patch", "head", "options"]
+    # Reading: every account with finance.view, own member accounts with the funding
+    # permission only (services.visible_accounts, Q35).
     permission_map = {
-        "list": V,
-        "retrieve": V,
+        "list": CHECKED_IN_SERVICE,
+        "retrieve": CHECKED_IN_SERVICE,
         "create": services.ACCOUNTS,
         "partial_update": services.ACCOUNTS,
-        "balances": V,
+        "balances": CHECKED_IN_SERVICE,
+        "members": CHECKED_IN_SERVICE,
+        "mine": services.FUND,
+        "set_main": services.ACCOUNTS,
         "opening": services.VALIDATE,
     }
 
     def get_queryset(self) -> QuerySet[TreasuryAccount]:
-        return TreasuryAccount.objects.filter(farm_id=self.farm_id)
+        return services.visible_accounts(self.tenant)
+
+    @extend_schema(request=MemberAccountOpenSerializer, responses=TreasuryAccountSerializer)
+    @action(detail=False, methods=["post"])
+    def mine(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Open (or return) the current user's member account."""
+        serializer = MemberAccountOpenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        account, created = services.open_member_account(self.tenant, **serializer.validated_data)
+        return Response(
+            self.get_serializer(account).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(request=None, responses=TreasuryAccountSerializer)
+    @action(detail=True, methods=["post"], url_path="set-main")
+    def set_main(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        account = services.set_main_account(self.tenant, account_id=self.get_object().id)
+        return Response(self.get_serializer(account).data)
+
+    @action(detail=False, methods=["get"])
+    def members(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Contributions, transfers to the treasury and balance of each member account."""
+        return Response(services.member_statement(self.tenant))
 
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = self.get_serializer(data=request.data)
@@ -123,12 +161,15 @@ class TransactionViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, FarmScopedGenericViewSet
 ):
     serializer_class = TransactionSerializer
+    queryset = FinancialTransaction.objects.none()  # model hint for OpenAPI; see get_queryset
     http_method_names = ["get", "post", "patch", "head", "options"]
+    # Reading and recording are checked by the services: a contributor sees and records
+    # only the movements of their own member account (Q35).
     permission_map = {
-        "list": V,
-        "retrieve": V,
-        "create": services.CREATE,
-        "partial_update": services.CREATE,
+        "list": CHECKED_IN_SERVICE,
+        "retrieve": CHECKED_IN_SERVICE,
+        "create": CHECKED_IN_SERVICE,
+        "partial_update": CHECKED_IN_SERVICE,
         "validate": services.VALIDATE,
         "reject": services.VALIDATE,
         "reverse": services.VALIDATE,
@@ -137,10 +178,18 @@ class TransactionViewSet(
         "treasury": V,
         "revisions": V,
     }
-    filterset_fields = ["kind", "status", "campaign", "plan", "category", "possible_duplicate"]
+    filterset_fields = [
+        "kind",
+        "status",
+        "campaign",
+        "plan",
+        "category",
+        "loan",
+        "possible_duplicate",
+    ]
 
     def get_queryset(self) -> QuerySet[FinancialTransaction]:
-        queryset = FinancialTransaction.objects.filter(farm_id=self.farm_id).prefetch_related(
+        queryset = services.visible_transactions(self.tenant).prefetch_related(
             "entries", "attachments"
         )
         account = self.request.query_params.get("account")
@@ -167,8 +216,13 @@ class TransactionViewSet(
         )
         serializer.is_valid(raise_exception=True)
         data = {**serializer.validated_data, "idempotency_key": key}
-        if data["kind"] == "transfer":
-            tx, created = services.record_transfer(self.tenant, data=data)
+        recorder = {
+            "transfer": services.record_transfer,
+            "funding": services.record_funding,
+            "repayment": services.record_repayment,
+        }.get(data["kind"])
+        if recorder is not None:
+            tx, created = recorder(self.tenant, data=data)
         else:
             data.pop("to_account", None)
             tx, created = services.record_transaction(self.tenant, data=data)
@@ -275,6 +329,32 @@ class TransactionViewSet(
         query = TreasuryQuerySerializer(data=request.query_params)
         query.is_valid(raise_exception=True)
         return Response(services.treasury(self.tenant, **query.validated_data))
+
+
+class LoanViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, FarmScopedGenericViewSet):
+    """Loans: disbursed by fundings, paid back by repayments (transactions, Q35)."""
+
+    serializer_class = LoanSerializer
+    permission_map = {
+        "list": V,
+        "retrieve": V,
+        "create": services.ACCOUNTS,
+        "positions": V,
+    }
+
+    def get_queryset(self) -> QuerySet[Loan]:
+        return Loan.objects.filter(farm_id=self.farm_id)
+
+    def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        loan = services.create_loan(self.tenant, data=dict(serializer.validated_data))
+        return Response(self.get_serializer(loan).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"])
+    def positions(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Disbursed, repaid and outstanding principal of each loan."""
+        return Response(services.loans_report(self.tenant))
 
 
 class BudgetLineViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, FarmScopedGenericViewSet):

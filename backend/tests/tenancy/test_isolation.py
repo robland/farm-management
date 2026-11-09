@@ -150,6 +150,12 @@ ROUTES: dict[str, Route] = {
     "farm-treasury-account-detail": Route("farm", ("get", "patch"), kind="treasury_account"),
     "farm-treasury-account-balances": Route("farm", ("get",)),
     "farm-treasury-account-opening": Route("farm", ("post",)),
+    "farm-treasury-account-mine": Route("farm", ("post",)),
+    "farm-treasury-account-members": Route("farm", ("get",)),
+    "farm-treasury-account-set-main": Route("farm", ("post",), kind="treasury_account"),
+    "farm-loan-list": Route("farm", ("get", "post")),
+    "farm-loan-detail": Route("farm", ("get",), kind="loan"),
+    "farm-loan-positions": Route("farm", ("get",)),
     "farm-transaction-list": Route("farm", ("get", "post")),
     "farm-transaction-detail": Route("farm", ("get", "patch"), kind="transaction"),
     "farm-transaction-validate": Route("farm", ("post",), kind="transaction"),
@@ -414,10 +420,20 @@ def _finance_objects(world: World) -> dict[str, object]:
             "idempotency_key": uuid.uuid4(),
         },
     )
+    loan = finance.create_loan(
+        ctx,
+        data={
+            "lender": "Banque fictive",
+            "principal": Decimal(100000),
+            "currency": "XAF",
+            "started_on": datetime_today(),
+        },
+    )
     return {
         "finance_category": category,
         "treasury_account": account,
         "transaction": tx,
+        "loan": loan,
         "budget_line": BudgetLine.objects.create(
             organization=world.org_a,
             farm=world.farm_a1,

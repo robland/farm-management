@@ -11,6 +11,7 @@ class StoredFile(OrgScopedModel):
         TECHNICAL_SHEET = "technical_sheet", "Fiche technique"
         PRODUCT_LABEL = "product_label", "Étiquette produit"
         RECEIPT = "receipt", "Justificatif financier"
+        FUNDING_PROOF = "funding_proof", "Justificatif d'apport"
         TASK_PHOTO = "task_photo", "Photo d'intervention"
         OBSERVATION_PHOTO = "observation_photo", "Photo d'observation"
         OTHER = "other", "Autre"

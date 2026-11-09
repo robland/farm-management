@@ -35,6 +35,8 @@ PERMISSIONS: dict[str, str] = {
     "finance.transaction.create": "Saisir des recettes et dépenses",
     "finance.transaction.validate": "Valider, rejeter et annuler des transactions",
     "finance.accounts.manage": "Gérer les comptes de trésorerie",
+    # Q35: own member account only (no access to the farm's other financial data).
+    "finance.funding.create": "Apporter des fonds sur son compte de membre",
     "finance.budget.edit": "Établir les budgets",
     "harvest.view": "Consulter les récoltes",
     "harvest.record": "Enregistrer des récoltes",
@@ -131,9 +133,15 @@ DEFAULT_ROLES: dict[str, RoleSpec] = {
             "finance.transaction.create",
             "finance.transaction.validate",
             "finance.accounts.manage",
+            "finance.funding.create",
             "finance.budget.edit",
             "audit.view",
         ],
+    },
+    # A member of the group who funds the farm (Q35): sees and moves only their own account.
+    "contributor": {
+        "name": "Membre contributeur",
+        "permissions": ["farm.view", "finance.funding.create"],
     },
 }
 

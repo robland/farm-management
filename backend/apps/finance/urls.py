@@ -9,6 +9,7 @@ router.register(
     f"{FARM}/treasury-accounts", views.TreasuryAccountViewSet, basename="farm-treasury-account"
 )
 router.register(f"{FARM}/transactions", views.TransactionViewSet, basename="farm-transaction")
+router.register(f"{FARM}/loans", views.LoanViewSet, basename="farm-loan")
 router.register(f"{FARM}/budget-lines", views.BudgetLineViewSet, basename="farm-budget-line")
 router.register(
     r"organizations/(?P<organization_id>[^/.]+)/finance-categories",

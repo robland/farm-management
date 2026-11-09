@@ -295,29 +295,34 @@ id · org · farm · task_report_id · product_id · quantity NUMERIC · unit ·
 ## 9. Finance
 
 ### `finance_treasury_account`
-id · org · farm · name · kind (`cash`, `bank`, `mobile_money`, `other`) · currency char(3) · institution · account_ref (masqué) · is_active · version.
-UNIQUE (farm_id, name).
+id · org · farm · name · kind (`cash`, `bank`, `mobile_money`, `other`) · **role** (`main` : trésorerie, `member` : compte d'un membre, `operating` : compte d'exploitation) · **holder_id** FK user NULL · currency char(3) · institution · account_ref (masqué) · is_active · version.
+UNIQUE (farm_id, name). UNIQUE (farm_id) WHERE role = 'main' : un seul compte principal. UNIQUE (farm_id, holder_id, currency) WHERE role = 'member'. CHECK : holder_id renseigné si et seulement si role = 'member' (Q35).
 
 ### `finance_category`
-id · org · kind (`expense`, `income`) · code · name · parent_id NULL · is_active.
-UNIQUE (organization_id, kind, code).
+id · org · kind (`expense`, `income`, `investment` : apports et financements) · code · name · parent_id NULL · **is_capex** bool (dépense d'investissement, exclue de la marge de campagne) · is_active.
+UNIQUE (organization_id, kind, code). CHECK : is_capex seulement si kind = 'expense'.
+
+### `finance_loan` (Q35)
+id · org · farm · lender · counterparty_id FK supplier NULL · principal NUMERIC(19,4) CHECK > 0 · currency · started_on · notes · authored · version.
+Capital restant dû = Σ déblocages validés (`kind='funding'`, `loan_id`) − Σ remboursements validés (`kind='repayment'`). Il est calculé, jamais stocké.
 
 ### `finance_financial_transaction`
 | Colonne | Type | Contraintes |
 |---|---|---|
 | id | uuid | PK (UUID client possible) |
 | org, farm | | |
-| kind | `expense`, `income`, `transfer`, `reversal`, `opening` | |
+| kind | `expense`, `income`, `transfer`, `reversal`, `opening`, `funding` (apport ou déblocage d'emprunt), `repayment` (remboursement du capital) | `funding` et `repayment` n'entrent ni dans les recettes ni dans les dépenses |
 | status | `submitted`, `validated`, `rejected`, `reversed` | |
 | business_date | date | |
 | amount | NUMERIC(19,4) | CHECK > 0 (valeur absolue, le signe est porté par les écritures) |
 | currency | char(3) | = devise du ou des comptes |
-| category_id | FK NULL | obligatoire pour expense et income |
+| category_id | FK NULL | obligatoire pour expense, income et funding (catégorie du même type ; `investment` pour un apport) |
 | description | text | |
 | counterparty_id | FK supplier NULL | fournisseur ou client |
 | campaign_id, plan_id, crop_cycle_id | FK NULL | |
 | reverses_id | FK self NULL | UNIQUE (une transaction n'est annulée qu'une fois) |
 | corrects_id | FK self NULL | |
+| loan_id | FK loan NULL | obligatoire pour repayment (CHECK) ; sur un apport, marque un déblocage |
 | idempotency_key | uuid | **UNIQUE (farm_id, idempotency_key)** |
 | created_offline | bool | |
 | device_id | FK NULL | |
@@ -515,6 +520,9 @@ erDiagram
   BUDGET_LINE ||--o{ BUDGET_ALLOCATION : recoit
   FINANCIAL_TRANSACTION ||--o| FINANCIAL_TRANSACTION : annule
   CATEGORY ||--o{ FINANCIAL_TRANSACTION : classe
+  USER ||--o{ TREASURY_ACCOUNT : titulaire
+  FARM ||--o{ LOAN : emprunte
+  LOAN ||--o{ FINANCIAL_TRANSACTION : debloque_rembourse
   FINANCIAL_TRANSACTION {
     uuid id PK
     uuid farm_id FK

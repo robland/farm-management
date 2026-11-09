@@ -21,6 +21,7 @@ from apps.finance.models import (
     FinanceCategory,
     FinancialTransaction,
     LedgerEntry,
+    Loan,
     TransactionRevision,
     TreasuryAccount,
 )
@@ -62,7 +63,10 @@ class TransactionForm(ServiceForm):
             (K.EXPENSE, K.EXPENSE.label),
             (K.INCOME, K.INCOME.label),
             (K.TRANSFER, K.TRANSFER.label),
+            (K.FUNDING, K.FUNDING.label),
+            (K.REPAYMENT, K.REPAYMENT.label),
         ],
+        help_text="Un apport sur un compte de membre est saisi par son titulaire (API).",
     )
     account = forms.ModelChoiceField(label="Compte", queryset=TreasuryAccount.objects.all())
     to_account = forms.ModelChoiceField(
@@ -85,7 +89,11 @@ class CorrectionForm(forms.Form):
 
 @admin.register(FinancialTransaction)
 class FinancialTransactionAdmin(ServiceAdmin):
-    """Expenses, incomes and transfers. Only a submitted transaction can be amended."""
+    """Expenses, incomes, transfers, fundings and loan repayments (Q35).
+
+    Only a submitted transaction can be amended; a member's contribution is recorded by
+    its holder and validated here.
+    """
 
     form = TransactionForm
     list_display = [
@@ -118,6 +126,7 @@ class FinancialTransactionAdmin(ServiceAdmin):
         "campaign",
         "plan",
         "crop_cycle",
+        "loan",
     ]
     change_fields = ["amount", "business_date", "category", "description", "reason"]
     actions = ["validate", "reject", "reverse", "correct"]
@@ -128,11 +137,15 @@ class FinancialTransactionAdmin(ServiceAdmin):
     def perform_create(self, ctx: TenantContext, data: dict[str, Any]) -> FinancialTransaction:
         data = {k: v for k, v in data.items() if v not in (None, "")}
         data.setdefault("idempotency_key", uuid.uuid4())
-        if data["kind"] == K.TRANSFER:
-            tx, _ = services.record_transfer(ctx, data=data)
-        else:
+        recorder = {
+            K.TRANSFER: services.record_transfer,
+            K.FUNDING: services.record_funding,
+            K.REPAYMENT: services.record_repayment,
+        }.get(data["kind"])
+        if recorder is None:
             data.pop("to_account", None)
-            tx, _ = services.record_transaction(ctx, data=data)
+            recorder = services.record_transaction
+        tx, _ = recorder(ctx, data=data)
         return tx
 
     def perform_update(
@@ -172,11 +185,14 @@ class OpeningForm(IdempotentForm):
 
 @admin.register(TreasuryAccount)
 class TreasuryAccountAdmin(ServiceAdmin):
-    list_display = ["name", "kind", "currency", "institution", "is_active", "farm"]
-    list_filter = ["kind", "currency", "is_active"]
-    add_fields = ["name", "kind", "currency", "institution", "account_ref", "is_active"]
+    """Main and operating accounts; member accounts are opened by their holder (Q35)."""
+
+    list_display = ["name", "role", "holder", "kind", "currency", "is_active", "farm"]
+    list_select_related = ["holder", "farm"]
+    list_filter = ["role", "kind", "currency", "is_active"]
+    add_fields = ["name", "kind", "role", "currency", "institution", "account_ref", "is_active"]
     change_fields = ["name", "kind", "institution", "account_ref", "is_active"]
-    actions = ["opening"]
+    actions = ["opening", "set_main"]
 
     def perform_create(self, ctx: TenantContext, data: dict[str, Any]) -> TreasuryAccount:
         return services.create_account(ctx, data=data)
@@ -203,11 +219,17 @@ class TreasuryAccountAdmin(ServiceAdmin):
             ctx, account=obj, balance=balance, business_date=business_date, idempotency_key=key
         )
 
+    @service_action("Définir comme compte principal (trésorerie)")
+    def set_main(self, ctx: TenantContext, obj: TreasuryAccount) -> None:
+        services.set_main_account(ctx, account_id=obj.id)
+
 
 @admin.register(FinanceCategory)
 class FinanceCategoryAdmin(ServiceAdmin):
+    list_display = ["name", "kind", "code", "is_capex", "is_active", "organization"]
+    list_filter = ["kind", "is_capex", "is_active"]
     scope = "organization"
-    add_fields = ["kind", "code", "name", "parent", "is_active"]
+    add_fields = ["kind", "code", "name", "parent", "is_capex", "is_active"]
 
     def perform_create(self, ctx: TenantContext, data: dict[str, Any]) -> FinanceCategory:
         return services.create_category(ctx, data=data)
@@ -221,6 +243,23 @@ class LedgerEntryAdmin(ReadOnlyAdmin):
     list_select_related = ["transaction", "account"]
     search_fields = ["=transaction__id", "account__name"]
     list_filter = ["currency"]
+
+
+@admin.register(Loan)
+class LoanAdmin(ServiceAdmin):
+    """Loans: disbursed by fundings and paid back by repayments, recorded as transactions."""
+
+    list_display = ["lender", "principal", "outstanding", "currency", "started_on", "farm"]
+    list_select_related = ["farm"]
+    add_fields = ["lender", "counterparty", "principal", "currency", "started_on", "notes"]
+
+    @admin.display(description="Capital restant dû")
+    def outstanding(self, obj: Loan) -> Any:
+        # One aggregate per row: a farm has a handful of loans.
+        return services.loan_position(obj)["outstanding"]
+
+    def perform_create(self, ctx: TenantContext, data: dict[str, Any]) -> Loan:
+        return services.create_loan(ctx, data=data)
 
 
 class BudgetLineAllocationInline(ReadOnlyTabularInline):

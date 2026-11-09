@@ -42,6 +42,13 @@ POLICIES: dict[str, tuple[str, str, frozenset[str], bool]] = {
         frozenset({"application/pdf", "image/jpeg", "image/png", "image/webp"}),
         True,
     ),
+    # Proof of a member's contribution (Q35): uploaded with the funding permission only.
+    P.FUNDING_PROOF: (
+        "finance.view",
+        "finance.funding.create",
+        frozenset({"application/pdf", "image/jpeg", "image/png", "image/webp"}),
+        True,
+    ),
     P.TASK_PHOTO: (
         "tasks.view",
         "tasks.report",
@@ -61,6 +68,10 @@ POLICIES: dict[str, tuple[str, str, frozenset[str], bool]] = {
         True,
     ),
 }
+
+# Purposes whose uploader may read the file back without the read permission: a
+# contributor sees the proof they sent, not the farm's other financial documents.
+UPLOADER_READABLE = frozenset({P.FUNDING_PROOF})
 
 _SIGNATURES: list[tuple[bytes, int, str]] = [
     (b"%PDF-", 0, "application/pdf"),
@@ -177,6 +188,8 @@ def get_file_for_read(ctx: TenantContext, file_id: Any) -> StoredFile:
         raise NotFoundError()
     if stored.status != StoredFile.Status.AVAILABLE:
         raise NotFoundError()
+    if stored.purpose in UPLOADER_READABLE and stored.uploaded_by_id == ctx.user.pk:
+        return stored
     ctx.require(POLICIES[stored.purpose][0])
     return stored
 

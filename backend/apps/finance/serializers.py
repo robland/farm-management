@@ -9,6 +9,7 @@ from apps.finance.models import (
     FinanceCategory,
     FinancialTransaction,
     LedgerEntry,
+    Loan,
     TreasuryAccount,
 )
 from apps.inventory.models import Supplier
@@ -20,12 +21,20 @@ MONEY: dict[str, Any] = {"max_digits": 19, "decimal_places": 4}
 
 
 class TreasuryAccountSerializer(serializers.ModelSerializer):
+    # Main or operating at creation (the first account of a farm is its main account);
+    # member accounts are opened by their holder (`accounts/mine/`), Q35.
+    role = serializers.ChoiceField(
+        choices=[TreasuryAccount.Role.MAIN, TreasuryAccount.Role.OPERATING], required=False
+    )
+
     class Meta:
         model = TreasuryAccount
         fields = [
             "id",
             "name",
             "kind",
+            "role",
+            "holder",
             "currency",
             "institution",
             "account_ref",
@@ -33,7 +42,12 @@ class TreasuryAccountSerializer(serializers.ModelSerializer):
             "version",
             "created_at",
         ]
-        read_only_fields = ["id", "version", "created_at"]
+        read_only_fields = ["id", "holder", "version", "created_at"]
+
+
+class MemberAccountOpenSerializer(serializers.Serializer):
+    currency = serializers.CharField(max_length=3, required=False)
+    kind = serializers.ChoiceField(choices=TreasuryAccount.Kind.choices, required=False)
 
 
 class FinanceCategorySerializer(serializers.ModelSerializer):
@@ -44,9 +58,39 @@ class FinanceCategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FinanceCategory
-        fields = ["id", "kind", "code", "name", "parent_category", "is_active", "version"]
+        fields = [
+            "id",
+            "kind",
+            "code",
+            "name",
+            "parent_category",
+            "is_capex",
+            "is_active",
+            "version",
+        ]
         read_only_fields = ["id", "version"]
         validators: list[Any] = []
+
+
+class LoanSerializer(serializers.ModelSerializer):
+    counterparty = OrgScopedRelatedField(
+        queryset=Supplier.objects.all(), required=False, allow_null=True
+    )
+
+    class Meta:
+        model = Loan
+        fields = [
+            "id",
+            "lender",
+            "counterparty",
+            "principal",
+            "currency",
+            "started_on",
+            "notes",
+            "version",
+            "created_at",
+        ]
+        read_only_fields = ["id", "version", "created_at"]
 
 
 class LedgerEntrySerializer(serializers.ModelSerializer):
@@ -78,6 +122,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             "crop_cycle",
             "reverses",
             "corrects",
+            "loan",
             "possible_duplicate",
             "created_offline",
             "validated_by",
@@ -95,10 +140,12 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 
 class TransactionInputSerializer(serializers.Serializer):
-    """Creation of an expense, income or transfer (REST and offline sync)."""
+    """Creation of an expense, income, transfer, funding or repayment (REST and sync)."""
 
     id = serializers.UUIDField(required=False)
-    kind = serializers.ChoiceField(choices=["expense", "income", "transfer"])
+    kind = serializers.ChoiceField(
+        choices=["expense", "income", "transfer", "funding", "repayment"]
+    )
     business_date = serializers.DateField()
     amount = serializers.DecimalField(**MONEY)
     currency = serializers.CharField(max_length=3, required=False)
@@ -122,19 +169,32 @@ class TransactionInputSerializer(serializers.Serializer):
     crop_cycle = FarmScopedPrimaryKeyRelatedField(
         queryset=CropCycle.objects.all(), required=False, allow_null=True
     )
+    loan = FarmScopedPrimaryKeyRelatedField(
+        queryset=Loan.objects.all(), required=False, allow_null=True
+    )
     attachments = OrgScopedRelatedField(
         queryset=StoredFile.objects.all(), many=True, required=False
     )
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        if attrs["kind"] == "transfer":
-            if not attrs.get("to_account"):
-                raise serializers.ValidationError({"to_account": ["Obligatoire."]})
-            for name in ("category", "counterparty"):
+        kind = attrs["kind"]
+        if kind == "transfer":
+            # Without `to_account`, a member account is transferred to the main account,
+            # which a contributor cannot see (checked by the service).
+            for name in ("category", "counterparty", "loan"):
                 if attrs.get(name):
                     raise serializers.ValidationError({name: ["Interdit pour un transfert."]})
+        elif kind == "repayment":
+            if not attrs.get("loan"):
+                raise serializers.ValidationError({"loan": ["Obligatoire."]})
+            if attrs.get("category"):
+                raise serializers.ValidationError(
+                    {"category": ["Le capital remboursé n'est pas une dépense."]}
+                )
         elif not attrs.get("category"):
             raise serializers.ValidationError({"category": ["Obligatoire."]})
+        elif kind in ("expense", "income") and attrs.get("loan"):
+            raise serializers.ValidationError({"loan": ["Réservé aux apports et remboursements."]})
         return attrs
 
 

@@ -72,6 +72,7 @@ uv run pytest                    # tests unitaires, API, permissions, multi-tena
 uv run ruff check . && uv run ruff format --check .
 uv run mypy apps config agronomy_engine
 uv run python manage.py spectacular --fail-on-warn --validate --file openapi.yaml  # export du schéma
+# Tests de charge (copie ou pile de test uniquement) : voir backend/loadtest/README.md
 
 # TypeScript (depuis la racine)
 npm run typecheck
@@ -116,7 +117,7 @@ Sans fournisseur IA, toutes les fonctions restent disponibles en saisie manuelle
 | 11 | Application mobile (Expo SDK 58, SQLite, Expo Router) | ✅ |
 | 12 | Durcissement et déploiement pilote | 🚧 en cours |
 
-Bilan à ce stade : 796 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement, les parcours de l'interface d'administration et le cookie de rafraîchissement), 15 tests du moteur de synchronisation, 27 tests du paquet partagé `@fms/shared`, 26 tests du client Web et 8 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
+Bilan à ce stade : 836 tests backend (dont le scénario MVP complet de bout en bout, la génération du schéma OpenAPI sans avertissement, les parcours de l'interface d'administration, le cookie de rafraîchissement, les apports des membres et les emprunts), 15 tests du moteur de synchronisation, 27 tests du paquet partagé `@fms/shared`, 26 tests du client Web et 8 tests mobiles passent ; ruff, mypy et le typage TypeScript strict sont propres ; le build Web de production réussit ; `expo-doctor` ne signale aucun problème.
 
 ### Déploiement pilote
 
@@ -159,6 +160,23 @@ npm test
 - Chaque élément affiche son statut local (en attente, refusé, conflit). L'onglet « Synchronisation » permet de réessayer ou d'abandonner explicitement une opération.
 - Le service worker garde l'application disponible hors ligne (build de production uniquement).
 
+### Trésorerie : apports des membres, compte principal et emprunts (Q35)
+
+Le circuit de l'argent :
+1. Un membre du groupe envoie des fonds au chef d'exploitation (hors plateforme).
+2. Il ouvre son **compte de membre** (`POST …/treasury-accounts/mine/`), puis enregistre un **apport** (`kind=funding`) avec un justificatif (photo ou PDF, usage `funding_proof`).
+3. Le chef d'exploitation vérifie le justificatif et **valide** l'apport. Un apport n'est jamais validé à l'enregistrement.
+4. Le membre **transfère** le montant vers le **compte principal** (la trésorerie), dans la limite de son solde validé. Le transfert est validé immédiatement ; sans destination indiquée, il part vers le compte principal.
+5. Le chef d'exploitation enregistre les **dépenses** depuis le compte principal ou un compte d'exploitation (caisse de terrain alimentée par transfert).
+
+Règles :
+- Chaque compte a un rôle : principal (un seul par exploitation ; le premier compte créé l'est par défaut), membre (un titulaire) ou exploitation.
+- Un compte de membre ne porte ni dépense, ni recette, ni transfert entrant. Seul son titulaire y enregistre un apport ou en retire de l'argent.
+- Le rôle **Membre contributeur** (droit `finance.funding.create`) ne voit que ses propres comptes, ses mouvements et ses justificatifs. Le relevé `…/treasury-accounts/members/` présente, par membre, les montants apportés, transférés et le solde.
+- **Emprunts** (`…/loans/`) : le déblocage est un apport lié à l'emprunt, sur le compte principal, dans la limite du montant emprunté. Le remboursement du capital (`kind=repayment`) part du compte principal, dans la limite du capital restant dû. Les intérêts sont une dépense. `…/loans/positions/` donne les montants débloqués, remboursés et le capital restant dû.
+- **Catégories** : le type « investissement » sert aux apports et aux financements. Le marqueur « dépense d'investissement » (machine, irrigation) s'applique aux catégories de dépense. Une subvention est une recette.
+- **Rapports** : la trésorerie distingue les recettes, les charges de campagne, les investissements, les apports et financements, les remboursements et les transferts. **La marge de campagne n'intègre ni les apports, ni les transferts, ni les remboursements, ni les investissements.**
+
 ### Interface d'administration Django
 
 `/admin/`, réservée au personnel de la plateforme (`is_staff`). Être administrateur d'une organisation ne donne pas accès à l'admin.
@@ -187,7 +205,7 @@ uv run python manage.py createsuperuser   # depuis backend/
   | Programme agronomique | produits, fertilisations, traitements, irrigation planifiée, observations | — |
   | Irrigation | conceptions, lignes manuelles, liaison au catalogue, devis, prix des lignes | calculer, valider, nouvelle version ; émettre, décision du client |
   | Tâches | équipes, tâches, comptes rendus | changer le statut, affecter |
-  | Finance | comptes, catégories, dépenses, recettes, transferts, modification d'une transaction soumise, lignes budgétaires, ventilations | valider, rejeter, annuler, corriger (motif obligatoire), solde d'ouverture |
+  | Finance | comptes (rôle principal ou exploitation), catégories (marqueur investissement), dépenses, recettes, transferts, apports sur le compte principal, emprunts, remboursements, modification d'une transaction soumise, lignes budgétaires, ventilations | valider (dont les apports des membres), rejeter, annuler, corriger (motif obligatoire), solde d'ouverture, définir le compte principal |
   | Récoltes | conversions mesurées, récoltes | annuler une récolte (motif) |
   | Synchronisation | — | résoudre un conflit |
   | IA | — | décider d'une suggestion (accepter, rejeter, modifier) |
@@ -223,6 +241,7 @@ uv run python manage.py createsuperuser   # depuis backend/
 - Le stockage des fichiers est local en développement ; un stockage compatible S3 reste à configurer pour la production.
 - Les ventes sont modélisées comme des recettes liées au cycle cultural (Q23).
 - Le client Web couvre pour l'instant les écrans de terrain (parcelles, tâches, dépenses, synchronisation). La conception des plans, l'irrigation et les rapports passent par l'API (documentation `/api/v1/docs/`) en attendant leurs écrans.
-- Le scénario MVP est testé de bout en bout au niveau de l'API. Les tests d'interface (Playwright) et les tests de charge restent à faire.
+- Le scénario MVP est testé de bout en bout au niveau de l'API. Les tests d'interface (Playwright) restent à faire. Les tests de charge sont faits (`backend/loadtest/README.md`) ; le premier pull complet d'un appareil reste lent (1 à 3 s).
+- Apports des membres : disponibles par l'API et dans l'admin (validation), pas encore dans les écrans Web et mobile. Ils ne sont pas proposés hors ligne : le rôle Membre contributeur ne reçoit pas de données financières par la synchronisation.
 - L'isolation entre organisations est appliquée côté serveur par le contexte de tenant. La RLS PostgreSQL n'est pas encore activée (Q27).
 - Le monorepo JavaScript utilise les workspaces npm. jsdom est fixé en version 26 à la racine, car les versions récentes exigent Node 22.15 ou plus.

@@ -1,17 +1,25 @@
-"""Treasury services (FR-070..077, OFFLINE_SYNC.md §7).
+"""Treasury services (FR-070..077, OFFLINE_SYNC.md §7, OPEN_QUESTIONS Q35).
 
 No "last write wins": a transaction is created once (idempotency key), may be
 amended only while `submitted` (with a revision snapshot), and once validated
 can only be reversed or corrected by new transactions.
+
+Money circuit (Q35): a member records a funding on their own member account (with a
+proof); the farm manager validates it; the member transfers it to the main account
+(the treasury), which pays the expenses. Member accounts never carry income nor
+expenses and never receive transfers. Loans are disbursed by fundings on the main
+account and paid back by repayments; neither enters the campaign margin.
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
+from django.db.models.functions import Coalesce
 from django.forms.models import model_to_dict
 from django.utils import timezone
 
@@ -34,6 +42,7 @@ from apps.finance.models import (
     FinanceCategory,
     FinancialTransaction,
     LedgerEntry,
+    Loan,
     TransactionRevision,
     TreasuryAccount,
 )
@@ -44,10 +53,19 @@ CREATE = "finance.transaction.create"
 VALIDATE = "finance.transaction.validate"
 ACCOUNTS = "finance.accounts.manage"
 BUDGET = "finance.budget.edit"
+FUND = "finance.funding.create"
 TX_ENTITY = "finance.transaction"
 ACCOUNT_ENTITY = "finance.account"
+LOAN_ENTITY = "finance.loan"
 K = FinancialTransaction.Kind
 ST = FinancialTransaction.Status
+ROLE = TreasuryAccount.Role
+# Category kind expected for each kind of transaction that is classified.
+CATEGORY_KIND_OF: dict[str, str] = {
+    K.EXPENSE: FinanceCategory.Kind.EXPENSE,
+    K.INCOME: FinanceCategory.Kind.INCOME,
+    K.FUNDING: FinanceCategory.Kind.INVESTMENT,
+}
 COUNTED = [ST.VALIDATED, ST.REVERSED]  # statuses whose entries make the balance
 DUPLICATE_WINDOW = timedelta(hours=24)
 MAX_FUTURE_DAYS = 1
@@ -85,17 +103,11 @@ def _farm(ctx: TenantContext) -> Farm:
 # --- Accounts and categories ------------------------------------------------------------
 
 
-@transaction.atomic
-def create_account(ctx: TenantContext, *, data: dict[str, Any]) -> TreasuryAccount:
-    ctx.require(ACCOUNTS)
-    currency_exponent(data["currency"])
-    account = TreasuryAccount(
-        organization_id=ctx.organization_id,
-        farm_id=ctx.require_farm_id,
-        created_by=ctx.user,
-        updated_by=ctx.user,
-        **data,
-    )
+def _has_main_account(ctx: TenantContext) -> bool:
+    return TreasuryAccount.objects.filter(farm_id=ctx.require_farm_id, role=ROLE.MAIN).exists()
+
+
+def _save_new_account(ctx: TenantContext, account: TreasuryAccount) -> TreasuryAccount:
     account.full_clean(validate_unique=False, validate_constraints=False)
     try:
         with transaction.atomic():
@@ -111,10 +123,107 @@ def create_account(ctx: TenantContext, *, data: dict[str, Any]) -> TreasuryAccou
         farm_id=ctx.farm_id,
         entity_type=ACCOUNT_ENTITY,
         entity_id=account.id,
-        after={"name": account.name, "currency": account.currency},
+        after={"name": account.name, "currency": account.currency, "role": account.role},
     )
     _change(ctx, ACCOUNT_ENTITY, account)
     return account
+
+
+@transaction.atomic
+def create_account(ctx: TenantContext, *, data: dict[str, Any]) -> TreasuryAccount:
+    """Main or operating account. The farm's first account becomes its main account."""
+    ctx.require(ACCOUNTS)
+    data = dict(data)
+    currency_exponent(data["currency"])
+    role = data.pop("role", None) or (ROLE.OPERATING if _has_main_account(ctx) else ROLE.MAIN)
+    if role == ROLE.MEMBER:
+        raise BusinessRuleError(
+            "Un compte de membre est ouvert par son titulaire.",
+            field_errors={"role": ["Réservé au titulaire."]},
+        )
+    if role == ROLE.MAIN and _has_main_account(ctx):
+        raise BusinessRuleError(
+            "L'exploitation a déjà un compte principal.", field_errors={"role": ["Déjà défini."]}
+        )
+    account = TreasuryAccount(
+        organization_id=ctx.organization_id,
+        farm_id=ctx.require_farm_id,
+        role=role,
+        created_by=ctx.user,
+        updated_by=ctx.user,
+        **data,
+    )
+    return _save_new_account(ctx, account)
+
+
+@transaction.atomic
+def open_member_account(
+    ctx: TenantContext, *, currency: str | None = None, kind: str = TreasuryAccount.Kind.OTHER
+) -> tuple[TreasuryAccount, bool]:
+    """The current user's member account (created on first use). Returns (account, created)."""
+    ctx.require(FUND)
+    farm = _farm(ctx)
+    currency = currency or farm.currency
+    currency_exponent(currency)
+    existing = TreasuryAccount.objects.filter(
+        farm_id=farm.id, role=ROLE.MEMBER, holder=ctx.user, currency=currency
+    ).first()
+    if existing is not None:
+        return existing, False
+    name = f"Compte de {ctx.user.full_name}"
+    if TreasuryAccount.objects.filter(farm_id=farm.id, name=name).exists():
+        name = f"{name} ({currency})"
+    account = TreasuryAccount(
+        organization_id=ctx.organization_id,
+        farm_id=farm.id,
+        role=ROLE.MEMBER,
+        holder=ctx.user,
+        name=name,
+        kind=kind,
+        currency=currency,
+        created_by=ctx.user,
+        updated_by=ctx.user,
+    )
+    return _save_new_account(ctx, account), True
+
+
+@transaction.atomic
+def set_main_account(ctx: TenantContext, *, account_id: uuid.UUID) -> TreasuryAccount:
+    """Make another (non-member) account the treasury; the former main becomes operating."""
+    ctx.require(ACCOUNTS)
+    accounts = {
+        a.id: a
+        for a in TreasuryAccount.objects.select_for_update().filter(
+            farm_id=ctx.require_farm_id, role__in=[ROLE.MAIN, ROLE.OPERATING]
+        )
+    }
+    target = accounts.get(account_id)
+    if target is None:
+        raise BusinessRuleError(
+            "Compte introuvable ou compte de membre.", field_errors={"account": ["Invalide."]}
+        )
+    if target.role == ROLE.MAIN:
+        return target
+    for account in accounts.values():
+        if account.role == ROLE.MAIN:
+            account.role = ROLE.OPERATING
+            account.version += 1
+            account.save(update_fields=["role", "version", "updated_at"])
+            _change(ctx, ACCOUNT_ENTITY, account)
+    target.role = ROLE.MAIN
+    target.version += 1
+    target.updated_by = ctx.user
+    target.save(update_fields=["role", "version", "updated_by", "updated_at"])
+    record_event(
+        action="treasury_account.set_main",
+        actor=ctx.user,
+        organization_id=ctx.organization_id,
+        farm_id=ctx.farm_id,
+        entity_type=ACCOUNT_ENTITY,
+        entity_id=target.id,
+    )
+    _change(ctx, ACCOUNT_ENTITY, target)
+    return target
 
 
 @transaction.atomic
@@ -130,6 +239,12 @@ def update_account(
     if account is None:
         raise NotFoundError()
     check_version(account, expected_version)
+    if {"role", "holder"} & set(changes):
+        raise BusinessRuleError(
+            "Le rôle et le titulaire d'un compte ne se modifient pas ainsi "
+            "(utilisez « définir comme compte principal »).",
+            field_errors={n: ["Non modifiable."] for n in {"role", "holder"} & set(changes)},
+        )
     if (
         "currency" in changes
         and changes["currency"] != account.currency
@@ -164,6 +279,11 @@ def create_category(ctx: TenantContext, *, data: dict[str, Any]) -> FinanceCateg
         raise BusinessRuleError(
             "Catégorie parente incompatible.", field_errors={"parent": ["Invalide."]}
         )
+    if data.get("is_capex") and data["kind"] != FinanceCategory.Kind.EXPENSE:
+        raise BusinessRuleError(
+            "Seule une catégorie de dépense peut être une dépense d'investissement.",
+            field_errors={"is_capex": ["Réservé aux dépenses."]},
+        )
     try:
         with transaction.atomic():
             return FinanceCategory.objects.create(organization_id=ctx.organization_id, **data)
@@ -193,6 +313,12 @@ def _account(
             field_errors={field: ["Compte désactivé."]},
         )
     return locked
+
+
+def validated_balance(account: TreasuryAccount) -> Decimal:
+    """Σ entries of validated (or reversed, with their reversal) transactions (FR-074)."""
+    total = account.entries.filter(transaction__status__in=COUNTED).aggregate(s=Sum("amount"))
+    return total["s"] or Decimal(0)
 
 
 def _check_links(ctx: TenantContext, data: dict[str, Any]) -> None:
@@ -276,9 +402,19 @@ def _possible_duplicate(
     return None
 
 
-def _attach(ctx: TenantContext, tx: FinancialTransaction, attachments: list[Any]) -> None:
+def _attach(
+    ctx: TenantContext,
+    tx: FinancialTransaction,
+    attachments: list[Any],
+    purposes: tuple[str, ...] = (StoredFile.Purpose.RECEIPT,),
+) -> None:
     for stored in attachments:
-        tx.attachments.add(require_usable_file(ctx, stored.id, StoredFile.Purpose.RECEIPT))
+        purpose = getattr(stored, "purpose", purposes[0])
+        if purpose not in purposes:
+            raise BusinessRuleError(
+                "Type de justificatif inattendu.", field_errors={"attachments": ["Invalide."]}
+            )
+        tx.attachments.add(require_usable_file(ctx, stored.id, purpose))
 
 
 @transaction.atomic
@@ -297,6 +433,13 @@ def record_transaction(
     if existing is not None:
         return existing, False
     account = _account(ctx, data.pop("account"))
+    if account.role == ROLE.MEMBER:
+        raise BusinessRuleError(
+            "Les dépenses et recettes passent par le compte principal ou un compte "
+            "d'exploitation, jamais par un compte de membre.",
+            details={"reason": "member_account"},
+            field_errors={"account": ["Compte de membre."]},
+        )
     currency = data.setdefault("currency", account.currency)
     if currency != account.currency:
         raise BusinessRuleError(
@@ -375,8 +518,14 @@ def record_transaction(
 def record_transfer(
     ctx: TenantContext, *, data: dict[str, Any], origin_op_id: uuid.UUID | None = None
 ) -> tuple[FinancialTransaction, bool]:
-    """Transfer between two accounts: two entries, excluded from income/expense (FR-073)."""
-    ctx.require(CREATE)
+    """Transfer between two accounts: two entries, excluded from income/expense (FR-073).
+
+    From a member account (Q35): only its holder, only to the main account, within its
+    validated balance; validated at once, the funds having been validated on arrival.
+    No transfer ever credits a member account.
+    """
+    if not (ctx.has_perm(CREATE) or ctx.has_perm(FUND)):
+        raise PermissionDeniedError(CREATE)
     data = dict(data)
     data.pop("kind", None)
     key = data.pop("idempotency_key")
@@ -384,7 +533,14 @@ def record_transfer(
     if existing is not None:
         return existing, False
     source = data.pop("account")
-    target = data.pop("to_account")
+    target = data.pop("to_account", None)
+    if target is None:
+        main = TreasuryAccount.objects.filter(farm_id=ctx.require_farm_id, role=ROLE.MAIN).first()
+        if source.role != ROLE.MEMBER or main is None:
+            raise BusinessRuleError(
+                "Compte destinataire obligatoire.", field_errors={"to_account": ["Obligatoire."]}
+            )
+        target = main  # a contributor transfers to the treasury without seeing it
     if source.id == target.id:
         raise BusinessRuleError(
             "Comptes source et destination identiques.",
@@ -394,6 +550,22 @@ def record_transfer(
     first, second = sorted([source, target], key=lambda a: str(a.id))
     locked = {a.id: _account(ctx, a) for a in (first, second)}
     source, target = locked[source.id], locked[target.id]
+    if target.role == ROLE.MEMBER:
+        raise BusinessRuleError(
+            "Un compte de membre ne reçoit pas de transfert.",
+            field_errors={"to_account": ["Compte de membre."]},
+        )
+    from_member = source.role == ROLE.MEMBER
+    if from_member:
+        if source.holder_id != ctx.user.pk or not ctx.has_perm(FUND):
+            raise PermissionDeniedError(FUND)
+        if target.role != ROLE.MAIN:
+            raise BusinessRuleError(
+                "Un compte de membre se transfère vers le compte principal uniquement.",
+                field_errors={"to_account": ["Compte principal attendu."]},
+            )
+    else:
+        ctx.require(CREATE)
     if source.currency != target.currency:
         raise BusinessRuleError(
             "Transfert entre devises différentes non pris en charge.",
@@ -407,7 +579,18 @@ def record_transfer(
         )
     _check_amount(data["amount"], currency)
     backdated = _check_date(ctx, data["business_date"])
-    status = _initial_status(ctx, backdated=backdated, duplicate=False)
+    status: str
+    if from_member:
+        available = validated_balance(source)  # the source row is locked above
+        if data["amount"] > available:
+            raise BusinessRuleError(
+                "Montant supérieur au solde validé du compte.",
+                details={"reason": "insufficient_balance", "available": str(available)},
+                field_errors={"amount": [f"Disponible : {available}."]},
+            )
+        status = ST.VALIDATED
+    else:
+        status = _initial_status(ctx, backdated=backdated, duplicate=False)
     tx = FinancialTransaction.objects.create(
         organization_id=ctx.organization_id,
         farm_id=ctx.require_farm_id,
@@ -449,6 +632,10 @@ def record_opening(
     """Opening balance of an account (may be negative, e.g. an overdraft)."""
     ctx.require(VALIDATE)
     account = _account(ctx, account)
+    if account.role == ROLE.MEMBER:
+        raise BusinessRuleError(
+            "Un compte de membre n'a pas de solde d'ouverture : ses fonds arrivent par apport."
+        )
     if balance == 0:
         raise BusinessRuleError("Un solde d'ouverture nul ne nécessite pas d'écriture.")
     check_amount_precision(abs(balance), account.currency)
@@ -475,6 +662,288 @@ def record_opening(
     _event(ctx, "transaction.opening.recorded", tx, after={"balance": str(balance)})
     _change(ctx, TX_ENTITY, tx)
     return tx
+
+
+# --- Fundings, loans and repayments (Q35) -------------------------------------------------
+
+
+def _create_single_entry(
+    ctx: TenantContext,
+    *,
+    kind: str,
+    account: TreasuryAccount,
+    sign: Decimal,
+    data: dict[str, Any],
+    key: uuid.UUID,
+    status: str,
+    origin_op_id: uuid.UUID | None,
+) -> tuple[FinancialTransaction, bool]:
+    try:
+        with transaction.atomic():
+            tx = FinancialTransaction.objects.create(
+                organization_id=ctx.organization_id,
+                farm_id=ctx.require_farm_id,
+                kind=kind,
+                idempotency_key=key,
+                status=status,
+                created_offline=origin_op_id is not None,
+                created_by=ctx.user,
+                updated_by=ctx.user,
+                validated_by=ctx.user if status == ST.VALIDATED else None,
+                validated_at=timezone.now() if status == ST.VALIDATED else None,
+                **data,
+            )
+    except IntegrityError:
+        existing = _replay(ctx, key, data.get("id"), {**data, "kind": kind})
+        if existing is None:
+            raise
+        return existing, False
+    LedgerEntry.objects.create(
+        transaction=tx, account=account, amount=sign * tx.amount, currency=tx.currency
+    )
+    return tx, True
+
+
+def _check_currency(account: TreasuryAccount, data: dict[str, Any]) -> str:
+    currency = data.setdefault("currency", account.currency)
+    if currency != account.currency:
+        raise BusinessRuleError(
+            "La devise doit être celle du compte.",
+            details={"reason": "currency_mismatch"},
+            field_errors={"currency": [f"Attendu : {account.currency}."]},
+        )
+    _check_amount(data["amount"], currency)
+    return currency
+
+
+def loan_position(loan: Loan) -> dict[str, Decimal]:
+    """Disbursed and repaid amounts (validated, and pending) and the outstanding principal."""
+    totals = {
+        (row["kind"], row["status"]): row["s"]
+        for row in loan.transactions.filter(kind__in=[K.FUNDING, K.REPAYMENT])
+        .values("kind", "status")
+        .annotate(s=Sum("amount"))
+    }
+
+    def total(kind: str, status: str) -> Decimal:
+        return totals.get((kind, status)) or Decimal(0)
+
+    disbursed = total(K.FUNDING, ST.VALIDATED)
+    repaid = total(K.REPAYMENT, ST.VALIDATED)
+    return {
+        "principal": loan.principal,
+        "disbursed": disbursed,
+        "pending_disbursement": total(K.FUNDING, ST.SUBMITTED),
+        "repaid": repaid,
+        "pending_repayment": total(K.REPAYMENT, ST.SUBMITTED),
+        "outstanding": disbursed - repaid,
+    }
+
+
+def _locked_loan(ctx: TenantContext, loan: Loan) -> Loan:
+    locked = (
+        Loan.objects.select_for_update().filter(id=loan.id, farm_id=ctx.require_farm_id).first()
+    )
+    if locked is None:
+        raise BusinessRuleError("Emprunt introuvable.", field_errors={"loan": ["Introuvable."]})
+    return locked
+
+
+@transaction.atomic
+def record_funding(
+    ctx: TenantContext, *, data: dict[str, Any], origin_op_id: uuid.UUID | None = None
+) -> tuple[FinancialTransaction, bool]:
+    """Money brought in without being an income (Q35). Returns (transaction, created).
+
+    - On a member account: by its holder only (`finance.funding.create`), with proofs;
+      submitted for validation by the farm manager.
+    - On the main account: a loan disbursement or a direct contribution recorded by the
+      farm (`finance.transaction.create`).
+    """
+    data = dict(data)
+    data.pop("kind", None)
+    data.pop("to_account", None)
+    key = data.pop("idempotency_key")
+    attachments = data.pop("attachments", [])
+    if not (ctx.has_perm(FUND) or ctx.has_perm(CREATE)):
+        raise PermissionDeniedError(FUND)
+    existing = _replay(ctx, key, data.get("id"), {**data, "kind": K.FUNDING})
+    if existing is not None:
+        return existing, False
+    account = _account(ctx, data.pop("account"))
+    if account.role == ROLE.MEMBER:
+        if account.holder_id != ctx.user.pk or not ctx.has_perm(FUND):
+            raise PermissionDeniedError(FUND)
+    elif account.role == ROLE.MAIN:
+        ctx.require(CREATE)
+    else:
+        raise BusinessRuleError(
+            "Un apport arrive sur un compte de membre ou sur le compte principal.",
+            field_errors={"account": ["Compte d'exploitation."]},
+        )
+    currency = _check_currency(account, data)
+    category = data.get("category")
+    if (
+        category is None
+        or category.organization_id != ctx.organization_id
+        or category.kind != FinanceCategory.Kind.INVESTMENT
+        or not category.is_active
+    ):
+        raise BusinessRuleError(
+            "Catégorie d'investissement (apport ou financement) obligatoire.",
+            field_errors={"category": ["Invalide."]},
+        )
+    loan = data.get("loan")
+    if loan is not None:
+        if account.role != ROLE.MAIN:
+            raise BusinessRuleError(
+                "Un emprunt est débloqué sur le compte principal.",
+                field_errors={"account": ["Compte principal attendu."]},
+            )
+        loan = data["loan"] = _locked_loan(ctx, loan)
+        if loan.currency != currency:
+            raise BusinessRuleError("Devise différente de celle de l'emprunt.")
+        position = loan_position(loan)
+        remaining = loan.principal - position["disbursed"] - position["pending_disbursement"]
+        if data["amount"] > remaining:
+            raise BusinessRuleError(
+                "Le déblocage dépasse le montant de l'emprunt.",
+                details={"available": str(remaining)},
+                field_errors={"amount": [f"Reste à débloquer : {remaining}."]},
+            )
+    _check_links(ctx, data)
+    backdated = _check_date(ctx, data["business_date"])
+    # A member's contribution always waits for an explicit validation (Q35), even when its
+    # holder could validate: the money is checked against the proof before it counts.
+    status = (
+        ST.SUBMITTED
+        if account.role == ROLE.MEMBER
+        else _initial_status(ctx, backdated=backdated, duplicate=False)
+    )
+    tx, created = _create_single_entry(
+        ctx,
+        kind=K.FUNDING,
+        account=account,
+        sign=Decimal(1),
+        data=data,
+        key=key,
+        status=status,
+        origin_op_id=origin_op_id,
+    )
+    if not created:
+        return tx, False
+    _attach(
+        ctx,
+        tx,
+        attachments,
+        purposes=(StoredFile.Purpose.FUNDING_PROOF, StoredFile.Purpose.RECEIPT),
+    )
+    _event(
+        ctx,
+        "transaction.funding.recorded",
+        tx,
+        after={
+            "amount": str(tx.amount),
+            "currency": currency,
+            "status": status,
+            "account": str(account.id),
+            "loan": str(loan.id) if loan else None,
+        },
+    )
+    _change(ctx, TX_ENTITY, tx, origin_op_id)
+    return tx, True
+
+
+@transaction.atomic
+def create_loan(ctx: TenantContext, *, data: dict[str, Any]) -> Loan:
+    ctx.require(ACCOUNTS)
+    currency_exponent(data["currency"])
+    if data["principal"] <= 0:
+        raise BusinessRuleError(
+            "Le montant doit être positif.", field_errors={"principal": ["> 0"]}
+        )
+    check_amount_precision(data["principal"], data["currency"], "principal")
+    counterparty = data.get("counterparty")
+    if counterparty is not None and counterparty.organization_id != ctx.organization_id:
+        raise BusinessRuleError(
+            "Tiers introuvable.", field_errors={"counterparty": ["Introuvable."]}
+        )
+    loan = Loan.objects.create(
+        organization_id=ctx.organization_id,
+        farm_id=ctx.require_farm_id,
+        created_by=ctx.user,
+        updated_by=ctx.user,
+        **data,
+    )
+    record_event(
+        action="loan.created",
+        actor=ctx.user,
+        organization_id=ctx.organization_id,
+        farm_id=ctx.farm_id,
+        entity_type=LOAN_ENTITY,
+        entity_id=loan.id,
+        after={"lender": loan.lender, "principal": str(loan.principal), "currency": loan.currency},
+    )
+    return loan
+
+
+@transaction.atomic
+def record_repayment(
+    ctx: TenantContext, *, data: dict[str, Any], origin_op_id: uuid.UUID | None = None
+) -> tuple[FinancialTransaction, bool]:
+    """Repayment of loan principal from the main account: neither an expense nor in the
+    margin (interest is an expense). Cannot exceed the outstanding principal."""
+    ctx.require(CREATE)
+    data = dict(data)
+    data.pop("kind", None)
+    data.pop("to_account", None)
+    key = data.pop("idempotency_key")
+    existing = _replay(ctx, key, data.get("id"), {**data, "kind": K.REPAYMENT})
+    if existing is not None:
+        return existing, False
+    if data.get("loan") is None:
+        raise BusinessRuleError("Emprunt obligatoire.", field_errors={"loan": ["Obligatoire."]})
+    loan = data["loan"] = _locked_loan(ctx, data["loan"])
+    account = _account(ctx, data.pop("account"))
+    if account.role != ROLE.MAIN:
+        raise BusinessRuleError(
+            "Un remboursement part du compte principal.",
+            field_errors={"account": ["Compte principal attendu."]},
+        )
+    currency = _check_currency(account, data)
+    if loan.currency != currency:
+        raise BusinessRuleError("Devise différente de celle de l'emprunt.")
+    position = loan_position(loan)
+    remaining = position["outstanding"] - position["pending_repayment"]
+    if data["amount"] > remaining:
+        raise BusinessRuleError(
+            "Le remboursement dépasse le capital restant dû.",
+            details={"outstanding": str(remaining)},
+            field_errors={"amount": [f"Capital restant dû : {remaining}."]},
+        )
+    data.pop("category", None)  # principal is not classified as an expense
+    backdated = _check_date(ctx, data["business_date"])
+    status = _initial_status(ctx, backdated=backdated, duplicate=False)
+    tx, created = _create_single_entry(
+        ctx,
+        kind=K.REPAYMENT,
+        account=account,
+        sign=Decimal(-1),
+        data=data,
+        key=key,
+        status=status,
+        origin_op_id=origin_op_id,
+    )
+    if not created:
+        return tx, False
+    _event(
+        ctx,
+        "transaction.repayment.recorded",
+        tx,
+        after={"amount": str(tx.amount), "loan": str(loan.id), "status": status},
+    )
+    _change(ctx, TX_ENTITY, tx, origin_op_id)
+    return tx, True
 
 
 # --- Lifecycle ---------------------------------------------------------------------------
@@ -517,6 +986,10 @@ def amend_transaction(
         )
     if tx.created_by_id != ctx.user.pk and not ctx.has_perm(VALIDATE):
         raise PermissionDeniedError(VALIDATE)
+    # The author still needs the right to record it: a contributor amends their own
+    # contributions only (Q35), a revoked finance role amends nothing.
+    if not (ctx.has_perm(CREATE) or (ctx.has_perm(FUND) and tx.kind == K.FUNDING)):
+        raise PermissionDeniedError(CREATE)
     allowed = {
         "amount",
         "business_date",
@@ -534,9 +1007,16 @@ def amend_transaction(
         )
     _check_links(ctx, changes)
     if "amount" in changes:
+        if tx.loan_id is not None:
+            # The loan limits were checked at recording time: cancel and re-enter instead.
+            raise BusinessRuleError(
+                "Le montant d'une opération d'emprunt ne se modifie pas : rejetez-la et "
+                "ressaisissez-la.",
+                field_errors={"amount": ["Non modifiable."]},
+            )
         _check_amount(changes["amount"], tx.currency)
     if "category" in changes and (
-        changes["category"] is None or changes["category"].kind != tx.kind
+        changes["category"] is None or changes["category"].kind != CATEGORY_KIND_OF.get(tx.kind)
     ):
         raise BusinessRuleError("Catégorie invalide.", field_errors={"category": ["Invalide."]})
     if "business_date" in changes:
@@ -713,8 +1193,13 @@ def sync_create(
 ) -> tuple[FinancialTransaction, bool]:
     """Offline creation: the client transaction id is the idempotency key."""
     data = {**data, "idempotency_key": data["id"]}
-    if data["kind"] == K.TRANSFER:
-        return record_transfer(ctx, data=data, origin_op_id=origin_op_id)
+    recorder = {
+        K.TRANSFER: record_transfer,
+        K.FUNDING: record_funding,
+        K.REPAYMENT: record_repayment,
+    }.get(data["kind"])
+    if recorder is not None:
+        return recorder(ctx, data=data, origin_op_id=origin_op_id)
     data.pop("to_account", None)
     return record_transaction(ctx, data=data, origin_op_id=origin_op_id)
 
@@ -722,14 +1207,38 @@ def sync_create(
 # --- Balances, treasury, budgets ----------------------------------------------------------
 
 
+def visible_accounts(ctx: TenantContext) -> Any:
+    """All the farm's accounts with `finance.view`; otherwise the user's member accounts."""
+    accounts = TreasuryAccount.objects.filter(farm_id=ctx.require_farm_id)
+    if ctx.has_perm(VIEW):
+        return accounts
+    if ctx.has_perm(FUND):
+        return accounts.filter(role=ROLE.MEMBER, holder=ctx.user)
+    raise PermissionDeniedError(VIEW)
+
+
+def visible_transactions(ctx: TenantContext) -> Any:
+    """All the farm's transactions with `finance.view`. Otherwise, the ones the user
+    recorded (a storekeeper entering an expense) and those on their member accounts:
+    a contributor never sees the farm's other finances (Q35)."""
+    transactions = FinancialTransaction.objects.filter(farm_id=ctx.require_farm_id)
+    if ctx.has_perm(VIEW):
+        return transactions
+    if ctx.has_perm(FUND) or ctx.has_perm(CREATE):
+        return transactions.filter(
+            Q(created_by=ctx.user)
+            | Q(entries__account__role=ROLE.MEMBER, entries__account__holder=ctx.user)
+        ).distinct()
+    raise PermissionDeniedError(VIEW)
+
+
 def account_balances(ctx: TenantContext, *, as_of: date | None = None) -> list[dict[str, Any]]:
     """Balance = Σ entries of validated/reversed transactions (FR-074).
 
     The provisional balance also includes submitted transactions and is labelled as such.
     """
-    ctx.require(VIEW)
     rows = []
-    for account in TreasuryAccount.objects.filter(farm_id=ctx.require_farm_id).order_by("name"):
+    for account in visible_accounts(ctx).order_by("name"):
         entries = account.entries.all()
         if as_of is not None:
             entries = entries.filter(transaction__business_date__lte=as_of)
@@ -743,6 +1252,8 @@ def account_balances(ctx: TenantContext, *, as_of: date | None = None) -> list[d
             {
                 "account": str(account.id),
                 "name": account.name,
+                "role": account.role,
+                "holder": str(account.holder_id) if account.holder_id else None,
                 "currency": account.currency,
                 "balance": validated,
                 "pending": pending,
@@ -764,10 +1275,14 @@ def _bucket(day: date, period: str) -> date:
 
 
 def treasury(ctx: TenantContext, *, period: str, date_from: date, date_to: date) -> dict[str, Any]:
-    """Inflows, outflows and closing balances per period and currency (FR-077).
+    """Flows and closing balances per period and currency (FR-077, Q35).
 
-    Transfers move money between accounts and are excluded from inflows/outflows;
-    a reversal reduces the flow of the transaction it cancels.
+    - `inflows`: income (subsidies included); `outflows`: campaign expenses;
+    - `investments`: expenses in an investment category (machine, irrigation);
+    - `fundings`: member contributions and loan disbursements; `repayments`: loan principal;
+    - `transfers`: money moved between the farm's accounts (both legs, counted once).
+    Only income and campaign expenses make the margin. A reversal reduces the flow of the
+    transaction it cancels.
     """
     ctx.require(VIEW)
     if date_to < date_from:
@@ -775,7 +1290,7 @@ def treasury(ctx: TenantContext, *, period: str, date_from: date, date_to: date)
     entries = LedgerEntry.objects.filter(
         transaction__farm_id=ctx.require_farm_id,
         transaction__status__in=COUNTED,
-    ).select_related("transaction", "transaction__reverses")
+    ).select_related("transaction", "transaction__reverses", "transaction__category")
     result: dict[str, dict[str, Any]] = {}
     for entry in entries:
         tx = entry.transaction
@@ -792,16 +1307,25 @@ def treasury(ctx: TenantContext, *, period: str, date_from: date, date_to: date)
             {
                 "inflows": Decimal(0),
                 "outflows": Decimal(0),
+                "investments": Decimal(0),
+                "fundings": Decimal(0),
+                "repayments": Decimal(0),
                 "transfers": Decimal(0),
                 "opening_entries": Decimal(0),
                 "net": Decimal(0),
             },
         )
         kind = tx.reverses.kind if tx.kind == K.REVERSAL and tx.reverses else tx.kind
+        # A reversal copies the category of the transaction it cancels.
+        capex = tx.category is not None and tx.category.is_capex
         if kind == K.INCOME:
             bucket["inflows"] += entry.amount
         elif kind == K.EXPENSE:
-            bucket["outflows"] += -entry.amount
+            bucket["investments" if capex else "outflows"] += -entry.amount
+        elif kind == K.FUNDING:
+            bucket["fundings"] += entry.amount
+        elif kind == K.REPAYMENT:
+            bucket["repayments"] += -entry.amount
         elif kind == K.TRANSFER:
             bucket["transfers"] += abs(entry.amount) / 2  # both legs of the transfer
         elif kind == K.OPENING:
@@ -817,6 +1341,66 @@ def treasury(ctx: TenantContext, *, period: str, date_from: date, date_to: date)
             periods.append({"period_start": key, **bucket, "closing_balance": running})
         output[currency] = {"opening_balance": data["opening"], "periods": periods}
     return {"period": period, "date_from": date_from, "date_to": date_to, "currencies": output}
+
+
+def member_statement(ctx: TenantContext) -> list[dict[str, Any]]:
+    """Per member account: contributed, transferred to the treasury, balance (Q35).
+
+    Validated amounts only, pending contributions shown apart. A contributor sees only
+    their own accounts (`visible_accounts`).
+    """
+    accounts = list(
+        visible_accounts(ctx).filter(role=ROLE.MEMBER).select_related("holder").order_by("name")
+    )
+    # One grouped query; a reversal counts under the kind of the transaction it cancels.
+    sums: dict[tuple[Any, str, str], Decimal] = {}
+    rows = (
+        LedgerEntry.objects.filter(account__in=accounts)
+        .annotate(effective=Coalesce("transaction__reverses__kind", "transaction__kind"))
+        .values("account_id", "effective", "transaction__status")
+        .annotate(s=Sum("amount"))
+    )
+    for row in rows:
+        sums[(row["account_id"], row["effective"], row["transaction__status"])] = row["s"]
+
+    def total(account: TreasuryAccount, kind: str, statuses: Sequence[str]) -> Decimal:
+        return sum((sums.get((account.id, kind, s)) or Decimal(0) for s in statuses), Decimal(0))
+
+    return [
+        {
+            "account": str(account.id),
+            "name": account.name,
+            "holder": str(account.holder_id),
+            "holder_name": account.holder.full_name if account.holder else "",
+            "currency": account.currency,
+            "contributed": total(account, K.FUNDING, COUNTED),
+            "pending_contributions": total(account, K.FUNDING, [ST.SUBMITTED]),
+            "transferred_to_treasury": -total(account, K.TRANSFER, COUNTED),
+            "balance": sum(
+                (
+                    v or Decimal(0)
+                    for (a, _, s), v in sums.items()
+                    if a == account.id and s in COUNTED
+                ),
+                Decimal(0),
+            ),
+        }
+        for account in accounts
+    ]
+
+
+def loans_report(ctx: TenantContext) -> list[dict[str, Any]]:
+    ctx.require(VIEW)
+    return [
+        {
+            "loan": str(loan.id),
+            "lender": loan.lender,
+            "currency": loan.currency,
+            "started_on": loan.started_on,
+            **loan_position(loan),
+        }
+        for loan in Loan.objects.filter(farm_id=ctx.require_farm_id).order_by("-started_on")
+    ]
 
 
 @transaction.atomic

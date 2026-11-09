@@ -1,9 +1,11 @@
-"""Treasury: accounts, transactions as ledger entries, budgets (ARCHITECTURE.md §9).
+"""Treasury: accounts, transactions as ledger entries, loans, budgets (ARCHITECTURE.md §9).
 
 Invariants (CLAUDE.md §11):
 - Amounts are NUMERIC/Decimal, never floats; each transaction keeps its currency.
 - A balance is the sum of the ledger entries of validated (or reversed) transactions.
 - Transfers are two entries and never count as income or expense.
+- Fundings (member contributions, loan disbursements) and loan repayments move money
+  but are neither income nor expense: they never enter the campaign margin (Q35).
 - Validated transactions are never updated nor deleted: corrections are reversals
   and new entries (enforced by services AND database triggers, migration 0002).
 """
@@ -34,8 +36,25 @@ class TreasuryAccount(FarmScopedModel, AuthoredModel, VersionedModel):
         MOBILE_MONEY = "mobile_money", "Mobile money"
         OTHER = "other", "Autre"
 
+    class Role(models.TextChoices):
+        # The farm treasury: fed by the members' accounts, pays the expenses (Q35).
+        MAIN = "main", "Compte principal (trésorerie)"
+        # Funds contributed by one member, then transferred to the main account.
+        MEMBER = "member", "Compte de membre"
+        # Any other farm account, e.g. a field cash box fed from the main account.
+        OPERATING = "operating", "Compte d'exploitation"
+
     name = models.CharField(max_length=120)
     kind = models.CharField(max_length=20, choices=Kind.choices)
+    role = models.CharField(max_length=10, choices=Role.choices, default=Role.OPERATING)
+    holder = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Titulaire d'un compte de membre.",
+    )
     currency = models.CharField(max_length=3, validators=[currency_validator])
     institution = models.CharField(max_length=150, blank=True)
     account_ref = models.CharField(max_length=60, blank=True)
@@ -43,7 +62,22 @@ class TreasuryAccount(FarmScopedModel, AuthoredModel, VersionedModel):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["farm", "name"], name="treasury_account_name_unique")
+            models.UniqueConstraint(fields=["farm", "name"], name="treasury_account_name_unique"),
+            models.UniqueConstraint(
+                fields=["farm"],
+                condition=models.Q(role="main"),
+                name="treasury_one_main_account",
+            ),
+            models.UniqueConstraint(
+                fields=["farm", "holder", "currency"],
+                condition=models.Q(role="member"),
+                name="treasury_one_member_account_per_currency",
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(role="member") & models.Q(holder__isnull=False))
+                | (~models.Q(role="member") & models.Q(holder__isnull=True)),
+                name="treasury_holder_iff_member",
+            ),
         ]
         ordering = ["name"]
 
@@ -55,6 +89,8 @@ class FinanceCategory(OrgScopedModel, VersionedModel):
     class Kind(models.TextChoices):
         EXPENSE = "expense", "Dépense"
         INCOME = "income", "Recette"
+        # Fundings: member contributions, loans (Q35). A subsidy is an income.
+        INVESTMENT = "investment", "Investissement (apports et financements)"
 
     kind = models.CharField(max_length=10, choices=Kind.choices)
     code = models.SlugField(max_length=60)
@@ -63,17 +99,52 @@ class FinanceCategory(OrgScopedModel, VersionedModel):
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="children"
     )
     is_active = models.BooleanField(default=True)
+    # Expense for a durable asset (machine, irrigation): reported apart from the campaign
+    # charges and excluded from the campaign margin. No depreciation yet (Q35).
+    is_capex = models.BooleanField("Dépense d'investissement", default=False)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "kind", "code"], name="finance_category_code_unique"
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(is_capex=False) | models.Q(kind="expense"),
+                name="finance_category_capex_is_expense",
+            ),
         ]
         ordering = ["kind", "name"]
 
     def __str__(self) -> str:
         return self.name
+
+
+class Loan(FarmScopedModel, AuthoredModel, VersionedModel):
+    """A borrowing: disbursed by funding transactions, paid back by repayments (Q35).
+
+    Outstanding principal = validated disbursements − validated repayments (computed,
+    never stored). Interest is recorded as an expense; no repayment schedule yet.
+    """
+
+    lender = models.CharField(max_length=200)
+    counterparty = models.ForeignKey(
+        "inventory.Supplier", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    principal = models.DecimalField(**MONEY)
+    currency = models.CharField(max_length=3, validators=[currency_validator])
+    started_on = models.DateField()
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(principal__gt=0), name="loan_principal_positive"
+            )
+        ]
+        ordering = ["-started_on"]
+
+    def __str__(self) -> str:
+        return f"{self.lender} : {self.principal} {self.currency}"
 
 
 class FinancialTransaction(FarmScopedModel, AuthoredModel, VersionedModel):
@@ -83,6 +154,8 @@ class FinancialTransaction(FarmScopedModel, AuthoredModel, VersionedModel):
         TRANSFER = "transfer", "Transfert"
         REVERSAL = "reversal", "Annulation"
         OPENING = "opening", "Solde d'ouverture"
+        FUNDING = "funding", "Apport / financement"
+        REPAYMENT = "repayment", "Remboursement d'emprunt"
 
     class Status(models.TextChoices):
         SUBMITTED = "submitted", "Soumise"
@@ -129,6 +202,10 @@ class FinancialTransaction(FarmScopedModel, AuthoredModel, VersionedModel):
     corrects = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="corrections"
     )
+    # Disbursement (funding) or repayment of a loan.
+    loan = models.ForeignKey(
+        Loan, on_delete=models.PROTECT, null=True, blank=True, related_name="transactions"
+    )
     idempotency_key = models.UUIDField()
     created_offline = models.BooleanField(default=False)
     device = models.ForeignKey(
@@ -153,9 +230,13 @@ class FinancialTransaction(FarmScopedModel, AuthoredModel, VersionedModel):
                 condition=models.Q(amount__gt=0), name="transaction_amount_positive"
             ),
             models.CheckConstraint(
-                condition=~models.Q(kind__in=["expense", "income"])
+                condition=~models.Q(kind__in=["expense", "income", "funding"])
                 | models.Q(category__isnull=False),
                 name="transaction_category_required",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(kind="repayment") | models.Q(loan__isnull=False),
+                name="transaction_repayment_has_loan",
             ),
         ]
         indexes = [

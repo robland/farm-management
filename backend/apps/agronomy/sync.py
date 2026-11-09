@@ -14,5 +14,6 @@ register(
         write_permission="observations.create",
         strategy=MergeStrategy.APPEND_ONLY,
         create=services.create_observation,
+        prefetch=("photos",),
     )
 )

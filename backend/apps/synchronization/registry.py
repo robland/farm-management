@@ -69,9 +69,12 @@ class EntityHandler:
     farm_attr: str = "farm_id"
     # Keyword used by the update/delete services for the entity id.
     id_kwarg: str = "entity_id"
+    # Relations read by the serializer: loaded in one query per page of the pull (no N+1).
+    prefetch: tuple[str, ...] = ()
 
     def queryset_for(self, ctx: TenantContext) -> models.QuerySet[Any]:
-        return self.model._default_manager.filter(**{self.farm_attr: ctx.require_farm_id})
+        queryset = self.model._default_manager.filter(**{self.farm_attr: ctx.require_farm_id})
+        return queryset.prefetch_related(*self.prefetch) if self.prefetch else queryset
 
     def serialize(self, instance: Any, ctx: TenantContext) -> dict[str, Any]:
         return dict(self.serializer_class(instance, context={"tenant": ctx}).data)

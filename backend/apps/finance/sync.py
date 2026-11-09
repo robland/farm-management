@@ -27,6 +27,7 @@ register(
         strategy=MergeStrategy.APPEND_ONLY,
         create=services.sync_create,
         commands={"finance.reverse": services.sync_reverse},
+        prefetch=("entries", "attachments"),
     )
 )
 

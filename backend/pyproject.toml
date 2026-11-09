@@ -34,6 +34,9 @@ dev = [
     "factory-boy>=3.3",
     "hypothesis>=6.140",
 ]
+load = [
+    "locust>=2.37,<3",
+]
 
 [tool.uv]
 package = false
@@ -55,6 +58,8 @@ known-first-party = ["apps", "config", "tests", "agronomy_engine"]
 "**/tests/**" = ["S101", "S105", "S106"]
 "tests/**" = ["S101", "S105", "S106"]
 "**/config/settings/*" = ["F405", "F403"]
+# Load-test scenario: random choices of fictitious amounts, never used for security.
+"loadtest/**" = ["S311"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -14,6 +14,7 @@ register(
         write_permission=services.REPORT,  # finer checks inside change_status
         strategy=MergeStrategy.STRICT,
         commands={"task.change_status": services.sync_change_status},
+        prefetch=("assignees", "teams"),
     )
 )
 
@@ -26,5 +27,6 @@ register(
         write_permission=services.REPORT,
         strategy=MergeStrategy.APPEND_ONLY,
         create=services.create_report,
+        prefetch=("consumptions", "photos"),
     )
 )

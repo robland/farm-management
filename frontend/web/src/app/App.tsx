@@ -103,7 +103,9 @@ function Shell(props: { farm: MeFarm; user: Me["user"]; store: DexieStore; api: 
   );
 }
 
-export function App({ api = new ApiClient() }: { api?: ApiClient }): ReactNode {
+const defaultApi = new ApiClient();
+
+export function App({ api = defaultApi }: { api?: ApiClient }): ReactNode {
   const [me, setMe] = useState<Me | null>(() => {
     const cached = localStorage.getItem(ME_CACHE);
     return cached && api.hasSession ? (JSON.parse(cached) as Me) : null;

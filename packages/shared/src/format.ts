@@ -44,7 +44,9 @@ export function formatMoney(amount: string, currency: string): string {
 export function formatNumber(value: string | number, maxDecimals = 2): string {
   const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
   if (!Number.isFinite(n)) return String(value);
-  const fixed = Math.abs(n).toFixed(maxDecimals).replace(/\.?0+$/, "");
+  // Only trailing zeros of the decimals are dropped: "3960" with 0 decimals stays "3960".
+  const raw = Math.abs(n).toFixed(maxDecimals);
+  const fixed = raw.includes(".") ? raw.replace(/\.?0+$/, "") : raw;
   const [whole = "0", fraction] = fixed.split(".");
   return `${n < 0 ? "-" : ""}${groupDigits(whole)}${fraction ? `,${fraction}` : ""}`;
 }

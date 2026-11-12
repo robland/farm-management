@@ -8,7 +8,10 @@ import { describeError, describeOperation, type LocalState, type OperationLike }
 
 export type NotificationType = "sync" | "issue" | "success" | "info";
 /** Where a notification's action leads: a web tab, or the matching mobile screen. */
-export type NotificationTarget = "tasks" | "parcels" | "expenses" | "sync";
+export type NotificationTarget = "tasks" | "campaigns" | "parcels" | "finances" | "sync";
+
+/** Targets renamed since earlier versions, still found in stored notifications. */
+const LEGACY_TARGETS: Record<string, NotificationTarget> = { expenses: "finances" };
 
 export interface AppNotification {
   /** Stable id: the same event notified twice (e.g. at each sync) is kept once. */
@@ -71,7 +74,11 @@ export function sanitizeNotifications(value: unknown): AppNotification[] {
   if (!Array.isArray(value)) return [];
   return value.filter((n): n is AppNotification =>
     typeof n === "object" && n !== null && typeof n.id === "string" && typeof n.text === "string"
-    && typeof n.createdAt === "string" && n.type in NOTIFICATION_TYPE_LABELS).slice(0, MAX_NOTIFICATIONS);
+    && typeof n.createdAt === "string" && n.type in NOTIFICATION_TYPE_LABELS).slice(0, MAX_NOTIFICATIONS)
+    .map((n) => {
+      const legacy = n.action ? LEGACY_TARGETS[n.action.tab] : undefined;
+      return legacy && n.action ? { ...n, action: { ...n.action, tab: legacy } } : n;
+    });
 }
 
 export function parseStoredNotifications(raw: string | null): AppNotification[] {

@@ -22,27 +22,31 @@ services:
 
   # One-off job run before the API starts: schema migrations are never applied by hand.
   migrate:
-    image: fms-api:${FMS_VERSION:-latest}
+    image: ${CONTAINER_REGISTRY_HOST}fms-api:${FMS_VERSION:-latest}
     build:
       context: ../backend
     env_file: .env
     environment: &api-env
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       DJANGO_ALLOWED_HOSTS: ${FMS_DOMAIN:?},api
-      DJANGO_CSRF_TRUSTED_ORIGINS: https://${FMS_DOMAIN}
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://${FMS_DOMAIN}, https://${FMS_WEB_DOMAIN}
     command: ["python", "manage.py", "migrate", "--noinput"]
     depends_on:
       db:
         condition: service_healthy
     restart: "no"
 
+
   api:
-    image: fms-api:${FMS_VERSION:-latest}
+    image: ${CONTAINER_REGISTRY_HOST}fms-api:${FMS_VERSION:-latest}
     build:
       context: ../backend
     restart: unless-stopped
     env_file: .env
-    environment: *api-env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      DJANGO_ALLOWED_HOSTS: ${FMS_DOMAIN:?},api
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://${FMS_DOMAIN}, https://${FMS_WEB_DOMAIN}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -59,14 +63,12 @@ services:
       retries: 3
 
   proxy:
-    image: fms-web:${FMS_VERSION:-latest}
+    image: ${CONTAINER_REGISTRY_HOST}fms-web:${FMS_VERSION:-latest}
     build:
       context: ..
       dockerfile: frontend/web/Dockerfile
     restart: unless-stopped
-    environment:
-      FMS_DOMAIN: ${FMS_DOMAIN}
-      FMS_ACME_EMAIL: ${FMS_ACME_EMAIL:?}
+
     ports:
       - "${FMS_HTTP_PORT:-80}:80"
       - "${FMS_HTTPS_PORT:-443}:443"
@@ -78,12 +80,13 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+
   # Daily backup: `docker compose ... run --rm backup` from the host's cron (runbook).
   backup:
     image: postgres:17
     profiles: ["ops"]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       BACKUP_DIR: /backups
       FILES_DIR: /data/files
       RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
@@ -102,7 +105,7 @@ services:
     image: postgres:17
     profiles: ["ops"]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       FILES_DIR: /data/files
     entrypoint: ["sh", "/scripts/restore_db.sh"]
     volumes:

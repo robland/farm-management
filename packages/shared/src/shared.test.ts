@@ -46,6 +46,10 @@ describe("number, area and date formatting", () => {
   it("formats numbers the French way", () => {
     expect(formatNumber("2500.75")).toBe(`2${NB}500,75`);
     expect(formatNumber(3)).toBe("3");
+    // Whole numbers keep their zeros, even without decimals (3960 was shown "396").
+    expect(formatNumber("3960", 0)).toBe(`3${NB}960`);
+    expect(formatNumber("20000.00", 0)).toBe(`20${NB}000`);
+    expect(formatNumber("1.9800")).toBe("1,98");
     expect(formatNumber("x")).toBe("x");
   });
 

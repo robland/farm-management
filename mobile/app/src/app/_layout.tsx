@@ -13,9 +13,14 @@ export default function RootLayout(): ReactNode {
       <Stack screenOptions={{ headerRight: () => <HeaderActions /> }}>
         <Stack.Screen name="index" options={{ title: "Gestion agricole" }} />
         <Stack.Screen name="tasks" options={{ title: "Tâches" }} />
+        <Stack.Screen name="campaign" options={{ title: "Campagne" }} />
+        <Stack.Screen name="plan" options={{ title: "Plan de production" }} />
         <Stack.Screen name="observation" options={{ title: "Observation" }} />
         <Stack.Screen name="harvest" options={{ title: "Récolte" }} />
-        <Stack.Screen name="expense" options={{ title: "Dépense" }} />
+        <Stack.Screen name="finance" options={{ title: "Finances" }} />
+        <Stack.Screen name="finance-entry" options={{ title: "Nouvelle opération" }} />
+        <Stack.Screen name="finance-tx" options={{ title: "Opération" }} />
+        <Stack.Screen name="member" options={{ title: "Mon compte de membre" }} />
         <Stack.Screen name="sync" options={{ title: "Synchronisation" }} />
         <Stack.Screen name="notifications" options={{ title: "Notifications" }} />
         <Stack.Screen name="profile" options={{ title: "Profil", headerRight: () => null }} />

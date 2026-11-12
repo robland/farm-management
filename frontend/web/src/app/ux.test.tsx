@@ -1,4 +1,4 @@
-/** UX guarantees of the field screens: no duplicate entries, explicit confirmations. */
+/** UX guarantees of the field screens: no duplicate entries, explicit confirmations (finances: features/finance). */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -44,49 +44,6 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   for (const store of stores.splice(0)) await store.db.delete();
-});
-
-describe("expenses", () => {
-  const FINANCE = ["finance.view", "finance.transaction.create"];
-
-  it("records a single transaction on a double click and shows it formatted", async () => {
-    localStorage.setItem("fms.categories.org-1", JSON.stringify([{ id: "cat-1", kind: "expense", name: "Engrais" }]));
-    const store = await openOffline(me("user-exp", FINANCE), [
-      { type: "finance.account", id: "acc-1", data: { name: "Caisse", kind: "cash", currency: "XAF", is_active: true } },
-    ]);
-    // Only one account: preselected.
-    await waitFor(() => expect((screen.getByLabelText("Compte") as HTMLSelectElement).value).toBe("acc-1"));
-    fireEvent.change(screen.getByLabelText("Catégorie"), { target: { value: "cat-1" } });
-    fireEvent.change(screen.getByLabelText("Montant (XAF)"), { target: { value: "15000" } });
-    const submit = screen.getByRole("button", { name: "Enregistrer la dépense" });
-    fireEvent.click(submit);
-    fireEvent.click(submit);
-
-    // The confirmation goes to the notification centre (bell with an unread count).
-    fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 non lue" }));
-    const panel = screen.getByRole("region", { name: "Notifications" });
-    expect(within(panel).getByText(/Dépense de 15.000 XAF enregistrée sur cet appareil/)).toBeTruthy();
-    fireEvent.click(within(panel).getByRole("button", { name: "Tout marquer comme lu" }));
-    expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(await opsOf(store, "finance.transaction")).toHaveLength(1);
-    // Testing Library normalizes the narrow no-break space of the DOM, hence the regexes.
-    expect(await screen.findByText(/^15.000 XAF$/)).toBeTruthy();
-
-    // The sync screen speaks plain French, not entity codes.
-    fireEvent.click(screen.getByRole("button", { name: "Synchronisation" }));
-    expect(await screen.findByText(/^Dépense de 15.000 XAF$/)).toBeTruthy();
-    expect(screen.queryByText(/finance\.transaction/)).toBeNull();
-  });
-
-  it("hides the entry form without the create permission", async () => {
-    await openOffline(me("user-ro", ["finance.view"]));
-    expect(await screen.findByText("Aucune transaction.")).toBeTruthy();
-    // Profile and notifications are reachable on every screen once signed in.
-    expect(screen.getByRole("button", { name: "Profil : Awa Diallo" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Enregistrer la dépense" })).toBeNull();
-  });
 });
 
 describe("tasks", () => {

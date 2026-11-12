@@ -19,10 +19,13 @@ COPY . .
 RUN DJANGO_SECRET_KEY=build-only DATABASE_URL=postgres://build@localhost/build \
     /app/.venv/bin/python manage.py collectstatic --noinput
 
+RUN chmod +x /app/entrypoint.sh
+
 RUN useradd --system --uid 1000 fms && mkdir -p /data/files && chown -R fms /data /app
 USER fms
 ENV FMS_FILE_STORAGE_ROOT=/data/files PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", \
      "--timeout", "120", "--access-logfile", "-"]

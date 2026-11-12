@@ -115,9 +115,12 @@ export default function Home(): ReactNode {
   ].filter(Boolean).join(" · ") || "Rien à faire aujourd'hui";
   const entries = [
     { title: "Tâches du jour", subtitle: taskSummary, route: "/tasks", visible: can("tasks.view") },
+    { title: "Campagne", route: "/campaign", visible: can("plans.view") },
     { title: "Nouvelle observation", route: "/observation", visible: can("observations.create") },
     { title: "Enregistrer une récolte", route: "/harvest", visible: can("harvest.record") },
-    { title: "Saisir une dépense", route: "/expense", visible: can("finance.transaction.create") },
+    { title: "Finances", route: "/finance", visible: can("finance.view") || can("finance.transaction.create") },
+    // A contributor only has their member account (Q35).
+    { title: "Mon compte de membre", route: "/member", visible: can("finance.funding.create") },
   ] as const;
   return (
     <Screen onRefresh={() => void syncNow()} refreshing={syncing}>

@@ -25,6 +25,9 @@ register(
         read_permission=services.VIEW,
         write_permission=services.CREATE,
         strategy=MergeStrategy.APPEND_ONLY,
+        # Offline entry by a storekeeper (no finance.view) or a contributor (FR-112, Q35);
+        # the recording services enforce who may record what.
+        create_permissions=(services.CREATE, services.FUND),
         create=services.sync_create,
         commands={"finance.reverse": services.sync_reverse},
         prefetch=("entries", "attachments"),

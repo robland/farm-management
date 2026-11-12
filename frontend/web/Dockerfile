@@ -14,8 +14,9 @@ COPY frontend/web frontend/web
 RUN npm run build --workspace web
 
 FROM caddy:2.10.0-alpine
+RUN setcap -r /usr/bin/caddy
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
 # A configuration error fails the build instead of the deployment.
-RUN FMS_DOMAIN=localhost FMS_ACME_EMAIL=build@example.org \
-    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# RUN caddy format --overwhrite
+RUN FMS_HTTPS_PORT=80 FMS_API_UPSTREAM=localhost:8000 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 COPY --from=build /repo/frontend/web/dist /srv

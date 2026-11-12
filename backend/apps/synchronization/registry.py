@@ -71,6 +71,15 @@ class EntityHandler:
     id_kwarg: str = "entity_id"
     # Relations read by the serializer: loaded in one query per page of the pull (no N+1).
     prefetch: tuple[str, ...] = ()
+    # Append-only types: a creation requires any one of these permissions instead of the
+    # write and read permissions. A creation returns no server state, and the create
+    # service checks the finer rules (a storekeeper records expenses without seeing the
+    # treasury; a contributor funds only their own member account, Q35).
+    create_permissions: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.create_permissions and self.strategy is not MergeStrategy.APPEND_ONLY:
+            raise ValueError("create_permissions is reserved to append-only entity types.")
 
     def queryset_for(self, ctx: TenantContext) -> models.QuerySet[Any]:
         queryset = self.model._default_manager.filter(**{self.farm_attr: ctx.require_farm_id})

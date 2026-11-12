@@ -10,7 +10,8 @@ const REFRESH_KEY = "fms.refresh";
 const DEVICE_KEY = "fms.deviceId";
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly body: { code?: string; message?: string }) {
+  constructor(readonly status: number,
+              readonly body: { code?: string; message?: string; field_errors?: Record<string, unknown> }) {
     super(body.message || `HTTP ${status}`);
     this.name = "ApiError";
   }
@@ -69,8 +70,13 @@ export class ApiClient {
     return this.refreshing;
   }
 
+  /** Authenticated request with extra headers (`If-Match` of versioned actions). */
+  send<T>(method: string, path: string, body: unknown, headers: Record<string, string>): Promise<T> {
+    return this.request<T>(method, path, body, true, false, headers);
+  }
+
   async request<T>(method: string, path: string, body?: unknown, auth = true,
-                   retried = false): Promise<T> {
+                   retried = false, headers: Record<string, string> = {}): Promise<T> {
     if (auth && !this.access && !(await this.refresh())) throw new AuthError("Session expirée");
     let response: Response;
     try {
@@ -79,6 +85,7 @@ export class ApiClient {
         headers: {
           "Content-Type": "application/json",
           ...(auth && this.access ? { Authorization: `Bearer ${this.access}` } : {}),
+          ...headers,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
@@ -87,7 +94,7 @@ export class ApiClient {
     }
     if (response.status === 401 && auth && !retried) {
       this.access = null;
-      if (await this.refresh()) return this.request<T>(method, path, body, auth, true);
+      if (await this.refresh()) return this.request<T>(method, path, body, auth, true, headers);
       throw new AuthError("Session expirée");
     }
     const data: unknown = response.status === 204 ? undefined

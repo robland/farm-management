@@ -233,8 +233,12 @@ def _store_receipt(
 
 
 def _apply(handler: EntityHandler, ctx: TenantContext, op: IncomingOperation) -> dict[str, Any]:
-    ctx.require(handler.write_permission)
-    ctx.require(handler.read_permission)
+    if op.op_type == "create" and handler.create_permissions:
+        if not any(ctx.has_perm(code) for code in handler.create_permissions):
+            ctx.require(handler.create_permissions[0])
+    else:
+        ctx.require(handler.write_permission)
+        ctx.require(handler.read_permission)
     if op.op_type == "create":
         return _apply_create(handler, ctx, op)
     if op.op_type == "update":

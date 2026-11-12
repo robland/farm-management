@@ -13,6 +13,7 @@ Plateforme de gestion agricole multi-exploitations : de la conception des plans 
 | `DATABASE_SCHEMA.md` | Modèle de données et diagrammes ERD |
 | `docs/architecture/OFFLINE_SYNC.md` | Protocole hors ligne et synchronisation |
 | `docs/architecture/AGRONOMY_ENGINE.md` | Formules, unités et hypothèses du moteur agronomique |
+| `docs/functional/PLANNING_SCENARIOS.md` | Scénarios d'utilisation de la planification de production |
 | `IMPLEMENTATION_PLAN.md` | Phases et suivi d'avancement |
 | `OPEN_QUESTIONS.md` | Questions ouvertes et choix par défaut appliqués |
 | `docs/operations/DEPLOYMENT.md` | Déploiement pilote, mise à jour, retour arrière, sauvegardes, surveillance |
@@ -146,16 +147,20 @@ npm test
 
 - L'adresse de l'API se règle dans `app.json` → `expo.extra.apiBaseUrl` (par défaut `http://10.0.2.2:8000/api/v1`, c'est-à-dire la machine hôte vue depuis l'émulateur Android).
 - Le jeton de rafraîchissement, l'identifiant d'appareil et l'utilisateur courant sont dans le stockage sécurisé du système (SecureStore). La file d'opérations, les données et le profil en cache sont dans une base SQLite propre à chaque utilisateur.
-- Écrans de terrain : tâches (démarrer, terminer avec compte rendu), observations, récoltes, dépenses et synchronisation (réessayer ou abandonner). Toutes les saisies fonctionnent hors ligne.
+- Écrans de terrain : tâches (démarrer, terminer avec compte rendu), observations, récoltes, finances et synchronisation (réessayer ou abandonner). Toutes les saisies fonctionnent hors ligne.
+- **Finances** (selon les droits) : soldes de la dernière synchronisation, saisie hors ligne d'une dépense, d'une recette ou d'un transfert (compte et catégorie en pastilles), opérations à valider avec validation ou rejet motivé (en ligne), dernières opérations. Le **membre contributeur** a son écran « Mon compte de membre » : apport, puis transfert à la trésorerie dans la limite du solde validé. Budgets, emprunts et gestion des comptes : sur le Web.
+- **Campagne** : consultation hors ligne des plans validés (chiffres clés du moteur, calendrier et phase en cours, lien vers les tâches). Les brouillons sont listés sans être ouvrables : la conception se fait sur le Web (Q7).
 - Dès la connexion, l'en-tête de chaque écran porte la cloche des notifications et le bouton profil.
-  - La cloche ouvre l'écran Notifications, avec ses filtres, son action « Tout marquer comme lu » et des liens vers Tâches, Synchronisation et Dépense. L'historique est conservé dans la base SQLite de l'utilisateur.
+  - La cloche ouvre l'écran Notifications, avec ses filtres, son action « Tout marquer comme lu » et des liens vers Tâches, Campagne, Finances et Synchronisation. L'historique est conservé dans la base SQLite de l'utilisateur.
   - Le bouton profil ouvre l'écran Profil (nom, contact, rôle). On peut y changer d'exploitation et s'y déconnecter, avec une confirmation s'il reste des saisies non envoyées.
 - Sur le choix d'exploitation, les exploitations sont regroupées par organisation. « Créer une exploitation » est réservé aux administrateurs de l'organisation ; la création nécessite le réseau.
 - Icônes : `@expo/vector-icons` (Ionicons), avec `expo-font`, qu'elle requiert.
 
 ### Client Web
 
-- Toutes les saisies (parcelles, statuts et comptes rendus de tâches, dépenses) sont d'abord écrites dans IndexedDB, puis envoyées par la file de synchronisation. Elles fonctionnent donc sans réseau.
+- Toutes les saisies (parcelles, statuts et comptes rendus de tâches, opérations financières) sont d'abord écrites dans IndexedDB, puis envoyées par la file de synchronisation. Elles fonctionnent donc sans réseau.
+- **Onglet Campagnes** (droit `plans.view`) : synthèse d'une campagne (plans, surface engagée, tâches, budget), liste des plans et frise d'occupation des parcelles. Un plan s'ouvre sur son **éditeur** s'il est en brouillon (en-tête, parcelles avec alerte d'occupation, paramètres de plantation avec l'origine de chaque valeur, calendrier, liste « À compléter » issue du calcul, suggestions de l'IA à accepter, modifier ou rejeter, pré-remplissage, calcul, validation) ou sur ses **résultats** s'il est validé (densités théorique et réelle, plants, semences, traçabilité du calcul, calendrier et tâches, versions et comparaison, nouvelle version, génération des tâches). Lecture hors ligne ; écriture en ligne avec contrôle de version (`If-Match`).
+- **Onglet Finances** (remplace « Dépenses ») : vue d'ensemble (soldes validés, trésorerie par jour, semaine ou mois, résultat de campagne, opérations à valider), journal filtrable avec fiche d'opération et historique, validation, rejet, annulation et correction avec motif obligatoire, budgets par campagne (prévu, réalisé, attente, écarts), comptes, comptes de membres et emprunts, « Mon compte de membre ». Ce qui est affiché dépend des droits ; le serveur les applique.
 - La synchronisation s'exécute au démarrage, au retour du réseau, chaque minute et deux secondes après une saisie, avec un seul onglet actif à la fois (Web Locks).
 - Chaque élément affiche son statut local (en attente, refusé, conflit). L'onglet « Synchronisation » permet de réessayer ou d'abandonner explicitement une opération.
 - Le service worker garde l'application disponible hors ligne (build de production uniquement).
@@ -240,8 +245,9 @@ uv run python manage.py createsuperuser   # depuis backend/
 - Pilote sur un serveur unique, sans haute disponibilité : la perte maximale correspond aux données saisies depuis la dernière sauvegarde quotidienne. Pendant une panne, les appareils continuent de fonctionner hors ligne.
 - Le stockage des fichiers est local en développement ; un stockage compatible S3 reste à configurer pour la production.
 - Les ventes sont modélisées comme des recettes liées au cycle cultural (Q23).
-- Le client Web couvre pour l'instant les écrans de terrain (parcelles, tâches, dépenses, synchronisation). La conception des plans, l'irrigation et les rapports passent par l'API (documentation `/api/v1/docs/`) en attendant leurs écrans.
+- Le client Web couvre les écrans de terrain, les campagnes et les finances. L'irrigation, le programme agronomique et les référentiels (variétés, fiches techniques) passent encore par l'API (`/api/v1/docs/`) ou l'admin.
+- Finances : les rapports renvoient leurs montants en nombres JSON (Q37) ; le magasinier ne peut pas lister les comptes (Q38) ; le rattachement au budget et l'envoi de justificatifs depuis les écrans restent à faire (Q39).
 - Le scénario MVP est testé de bout en bout au niveau de l'API. Les tests d'interface (Playwright) restent à faire. Les tests de charge sont faits (`backend/loadtest/README.md`) ; le premier pull complet d'un appareil reste lent (1 à 3 s).
-- Apports des membres : disponibles par l'API et dans l'admin (validation), pas encore dans les écrans Web et mobile. Ils ne sont pas proposés hors ligne : le rôle Membre contributeur ne reçoit pas de données financières par la synchronisation.
+- Apports des membres : saisis hors ligne depuis les écrans « Mon compte de membre » (Web et mobile) et validés en ligne. Le rôle Membre contributeur ne reçoit pas de données financières par la synchronisation : son solde et ses mouvements viennent de l'API, avec le dernier état connu hors ligne.
 - L'isolation entre organisations est appliquée côté serveur par le contexte de tenant. La RLS PostgreSQL n'est pas encore activée (Q27).
 - Le monorepo JavaScript utilise les workspaces npm. jsdom est fixé en version 26 à la racine, car les versions récentes exigent Node 22.15 ou plus.

@@ -5,8 +5,9 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import { ApiClient } from "../api/client";
 import type { Me, MeFarm } from "../api/types";
 import { LoginPage } from "../features/auth/LoginPage";
+import { CampaignsPage } from "../features/campaigns/CampaignsPage";
 import { FarmPicker } from "../features/farms/FarmPicker";
-import { ExpensesPage } from "../features/finance/ExpensesPage";
+import { FinancePage } from "../features/finance/FinancePage";
 import { ParcelsPage } from "../features/parcels/ParcelsPage";
 import { SyncPage } from "../features/sync/SyncPage";
 import { TasksPage } from "../features/tasks/TasksPage";
@@ -38,8 +39,10 @@ function Shell(props: { farm: MeFarm; user: Me["user"]; store: DexieStore; api: 
   const can = (code: string) => props.farm.permissions.includes(code);
   const tabs: { id: Tab; label: string; visible: boolean }[] = [
     { id: "tasks", label: "Tâches", visible: can("tasks.view") },
+    { id: "campaigns", label: "Campagnes", visible: can("plans.view") },
     { id: "parcels", label: "Parcelles", visible: can("fields.view") },
-    { id: "expenses", label: "Dépenses", visible: can("finance.view") || can("finance.transaction.create") },
+    { id: "finances", label: "Finances",
+      visible: can("finance.view") || can("finance.transaction.create") || can("finance.funding.create") },
     { id: "sync", label: "Synchronisation", visible: true },
   ];
   const visible = tabs.filter((t) => t.visible);
@@ -88,14 +91,12 @@ function Shell(props: { farm: MeFarm; user: Me["user"]; store: DexieStore; api: 
           ))}
         </nav>
       </AppHeader>
-      <main className="mx-auto flex max-w-4xl flex-col gap-4 p-4">
+      <main className={`mx-auto flex flex-col gap-4 p-4 ${tab === "finances" || tab === "campaigns" ? "max-w-6xl" : "max-w-4xl"}`}>
         <div className="sm:hidden"><OfflineBanner online={online} /></div>
         {tab === "parcels" && <ParcelsPage canEdit={can("fields.edit")} />}
         {tab === "tasks" && <TasksPage canReport={can("tasks.report")} />}
-        {tab === "expenses" && (
-          <ExpensesPage api={props.api} organizationId={props.farm.organization_id}
-                        canCreate={can("finance.transaction.create")} />
-        )}
+        {tab === "campaigns" && <CampaignsPage api={props.api} farm={props.farm} />}
+        {tab === "finances" && <FinancePage api={props.api} farm={props.farm} userId={props.user.id} />}
         {tab === "sync" && <SyncPage store={props.store} />}
       </main>
     </div>

@@ -1,12 +1,12 @@
 # Pilot reverse proxy (docs/operations/DEPLOYMENT.md).
 # - HTTPS certificates obtained and renewed automatically for FMS_DOMAIN.
 # - /api, /admin, /static → Django (gunicorn); everything else → the Web client (SPA).
+
 {
-	# Certificate authority account: receives expiry warnings.
-	email {$FMS_ACME_EMAIL}
+	auto_https off
 }
 
-{$FMS_DOMAIN:localhost} {
+:{$FMS_HTTPS_PORT:FMS_HTTP_PORT:8080} {
 	encode zstd gzip
 
 	# Largest accepted upload: technical sheet (FMS_MAX_TECHNICAL_SHEET_MB, 20 MB) + margin.
@@ -24,11 +24,15 @@
 
 	@backend path /api/* /admin /admin/* /static/*
 	handle @backend {
-		reverse_proxy api:8000 {
+		reverse_proxy {$FMS_API_UPSTREAM:api:8000} {
 			# Gunicorn timeout is 120 s (synchronous AI calls, OPEN_QUESTIONS Q24).
 			transport http {
 				read_timeout 130s
 			}
+
+			# Transmet le bon nom d'hôte au backend Django si hébergé sur un autre service Render
+			header_up Host {upstream_hostport}
+
 		}
 	}
 

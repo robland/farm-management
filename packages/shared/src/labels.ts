@@ -24,6 +24,7 @@ export const ROLE_LABELS: Record<string, string> = {
   worker: "Ouvrier",
   storekeeper: "Magasinier",
   finance_manager: "Gestionnaire financier",
+  contributor: "Membre contributeur",
 };
 
 export const TASK_STATUS_LABELS: Record<string, string> = {
@@ -40,6 +41,8 @@ export const TRANSACTION_KIND_LABELS: Record<string, string> = {
   transfer: "Transfert",
   reversal: "Annulation",
   opening: "Solde d'ouverture",
+  funding: "Apport / financement",
+  repayment: "Remboursement d'emprunt",
 };
 
 export const TRANSACTION_STATUS_LABELS: Record<string, string> = {

@@ -16,7 +16,8 @@ const TYPE_STYLES: Record<NotificationType, { icon: keyof typeof Ionicons.glyphM
 };
 
 /** Mobile screens for the notification actions (parcels have no mobile screen). */
-const ROUTES: Partial<Record<NotificationTarget, Href>> = { tasks: "/tasks", sync: "/sync", expenses: "/expense" };
+const ROUTES: Partial<Record<NotificationTarget, Href>> = { tasks: "/tasks", sync: "/sync", finances: "/finance",
+                                                               campaigns: "/campaign" };
 
 export default function Notifications(): ReactNode {
   const { notifications, unread, markAllRead, markRead, farm } = useSession();
